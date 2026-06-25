@@ -16,6 +16,7 @@ import os
 import sys
 import signal
 import re
+import html
 import functools
 import logging
 
@@ -459,8 +460,15 @@ class SdwdateGuiClient(QObject):
                 self.kick_client()
                 return False
 
-            real_char: str = chr(octal_int)
-            sdwdate_msg_str = sdwdate_msg_str.replace(octal_escape, real_char)
+        ## Decode every escape in a single left-to-right pass. A sequential
+        ## str.replace() per distinct escape is order-dependent: a
+        ## replacement can form a sequence that a later replacement then
+        ## re-decodes, so the same input would decode differently depending
+        ## on set / hash iteration order. re.sub() rewrites each match
+        ## exactly once and never rescans its own output.
+        sdwdate_msg_str = decode_re.sub(
+            lambda match: chr(int(match.group()[1:], 8)), sdwdate_msg_str
+        )
         self.sdwdate_msg = sdwdate_msg_str
 
         self.sdwdateStatusChanged.emit()
@@ -703,7 +711,8 @@ class SdwdateTrayIcon(QSystemTrayIcon):
             self.clicked_once = True
 
         msg_window: SdwdateGuiFrame = SdwdateGuiFrame(
-            f"Client '{client.client_name}' is no longer connected.",
+            f"Client '{html.escape(client.client_name_or_unknown())}' is no "
+            "longer connected.",
             self.error_icon,
         )
         if self.msg_window is not None and self.msg_window.isVisible():
@@ -738,18 +747,25 @@ class SdwdateTrayIcon(QSystemTrayIcon):
 
         msg_window: SdwdateGuiFrame | None
 
+        ## The client name and the sdwdate message are attacker-controlled
+        ## (a client is a separate, less-trusted VM under Qubes OS), and the
+        ## message is rendered as rich text. HTML-escape them so a client
+        ## cannot inject markup into the server's GUI.
+        safe_name: str = html.escape(client.client_name_or_unknown())
+
         if message_type == MessageType.SDWDATE:
             if client.sdwdate_msg is None:
                 return
+            safe_msg: str = html.escape(client.sdwdate_msg)
             if running_in_qubes_os():
                 msg_window = SdwdateGuiFrame(
                     "Last message from sdwdate on "
-                    f"{client.client_name}:<br><br>" + client.sdwdate_msg,
+                    f"{safe_name}:<br><br>" + safe_msg,
                     self.sdwdate_icon_list[client.sdwdate_status.value],
                 )
             else:
                 msg_window = SdwdateGuiFrame(
-                    "Last message from sdwdate:<br><br>" + client.sdwdate_msg,
+                    "Last message from sdwdate:<br><br>" + safe_msg,
                     self.sdwdate_icon_list[client.sdwdate_status.value],
                 )
         else:  # message_type == MessageType.TOR
@@ -786,7 +802,7 @@ to connect to or configure the Tor network."""
 
             if running_in_qubes_os():
                 msg_window = SdwdateGuiFrame(
-                    f"Tor status on {client.client_name}:<br><br>" + msg_text,
+                    f"Tor status on {safe_name}:<br><br>" + msg_text,
                     self.tor_icon_list[client.tor_status.value],
                 )
             else:
