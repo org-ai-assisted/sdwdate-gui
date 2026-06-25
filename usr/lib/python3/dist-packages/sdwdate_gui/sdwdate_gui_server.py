@@ -51,12 +51,32 @@ from PyQt5.QtNetwork import (
     QLocalServer,
 )
 
+from sanitize_string.sanitize_string_lib import sanitize_string
+
 from .sdwdate_gui_shared import (
     ConfigData,
     check_bytes_printable,
     parse_ipc_command,
     parse_config_files,
 )
+
+
+def sanitize_for_richtext(untrusted: str) -> str:
+    """
+    Make untrusted text safe to embed in a Qt rich-text widget.
+
+    A client is a separate, less-trusted VM under Qubes OS, and the client
+    name (on non-Qubes systems) and the sdwdate message are not restricted
+    beyond printable bytes, so they must never be able to influence the
+    server's GUI. sanitize_string() (from helper-scripts) strips HTML markup
+    and replaces ANSI escapes, control characters and all non-ASCII -
+    including right-to-left overrides, zero-width and homoglyph characters -
+    with underscores. html.escape() then neutralises any rich-text
+    metacharacter sanitize_string() leaves behind (a lone '<', '>' or '&' is
+    harmless on a terminal but not in an HTML renderer).
+    """
+
+    return html.escape(sanitize_string(untrusted))
 
 
 class SdwdateStatus(Enum):
@@ -711,8 +731,8 @@ class SdwdateTrayIcon(QSystemTrayIcon):
             self.clicked_once = True
 
         msg_window: SdwdateGuiFrame = SdwdateGuiFrame(
-            f"Client '{html.escape(client.client_name_or_unknown())}' is no "
-            "longer connected.",
+            f"Client '{sanitize_for_richtext(client.client_name_or_unknown())}'"
+            " is no longer connected.",
             self.error_icon,
         )
         if self.msg_window is not None and self.msg_window.isVisible():
@@ -749,14 +769,15 @@ class SdwdateTrayIcon(QSystemTrayIcon):
 
         ## The client name and the sdwdate message are attacker-controlled
         ## (a client is a separate, less-trusted VM under Qubes OS), and the
-        ## message is rendered as rich text. HTML-escape them so a client
-        ## cannot inject markup into the server's GUI.
-        safe_name: str = html.escape(client.client_name_or_unknown())
+        ## message is rendered as rich text. Strip markup, control / ANSI and
+        ## non-ASCII characters and escape the rest so a client cannot inject
+        ## markup or confusable characters into the server's GUI.
+        safe_name: str = sanitize_for_richtext(client.client_name_or_unknown())
 
         if message_type == MessageType.SDWDATE:
             if client.sdwdate_msg is None:
                 return
-            safe_msg: str = html.escape(client.sdwdate_msg)
+            safe_msg: str = sanitize_for_richtext(client.sdwdate_msg)
             if running_in_qubes_os():
                 msg_window = SdwdateGuiFrame(
                     "Last message from sdwdate on "
