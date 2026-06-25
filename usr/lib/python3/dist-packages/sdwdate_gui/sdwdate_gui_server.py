@@ -61,9 +61,20 @@ from .sdwdate_gui_shared import (
 )
 
 
-def sanitize_for_richtext(untrusted: str) -> str:
+## Reasonable maximum lengths for untrusted strings shown in the GUI. A VM
+## name under Qubes OS is at most 31 characters; the non-Qubes self-reported
+## name is capped at 255. The sdwdate message rides a wire frame the server
+## already limits to 4096 bytes, but that is far more than is useful in a
+## status window.
+MAX_QUBES_NAME_LEN: int = 31
+MAX_DISPLAY_NAME_LEN: int = 255
+MAX_DISPLAY_MSG_LEN: int = 2048
+
+
+def sanitize_for_richtext(untrusted: str, max_length: int) -> str:
     """
-    Make untrusted text safe to embed in a Qt rich-text widget.
+    Make untrusted text safe to embed in a Qt rich-text widget, truncated to
+    at most max_length characters.
 
     A client is a separate, less-trusted VM under Qubes OS, and the client
     name (on non-Qubes systems) and the sdwdate message are not restricted
@@ -73,10 +84,12 @@ def sanitize_for_richtext(untrusted: str) -> str:
     including right-to-left overrides, zero-width and homoglyph characters -
     with underscores. html.escape() then neutralises any rich-text
     metacharacter sanitize_string() leaves behind (a lone '<', '>' or '&' is
-    harmless on a terminal but not in an HTML renderer).
+    harmless on a terminal but not in an HTML renderer). The length cap keeps
+    a pathologically long string from bloating the GUI; it is applied after
+    sanitization, matching the sanitize-string command's own semantics.
     """
 
-    return html.escape(sanitize_string(untrusted))
+    return html.escape(sanitize_string(untrusted)[:max_length])
 
 
 class SdwdateStatus(Enum):
@@ -251,7 +264,18 @@ class SdwdateGuiClient(QObject):
         if len(qrexec_header_parts) < 2:
             return True
 
-        self.client_name = qrexec_header_parts[1]
+        header_name: str = qrexec_header_parts[1]
+        ## The name comes from the qrexec subsystem and is therefore trusted,
+        ## but enforce the Qubes OS VM name length limit anyway as defense in
+        ## depth, so a pathological name cannot bloat the menu or a dialog.
+        if len(header_name) > MAX_QUBES_NAME_LEN:
+            logging.warning(
+                "Kicking client '%s' for an over-long qrexec header name",
+                self.client_name_or_unknown(),
+            )
+            self.kick_client()
+            return False
+        self.client_name = header_name
         self.client_name_set = True
 
         ## Unlike the non-Qubes path (see __set_client_name), the name was not
@@ -731,8 +755,9 @@ class SdwdateTrayIcon(QSystemTrayIcon):
             self.clicked_once = True
 
         msg_window: SdwdateGuiFrame = SdwdateGuiFrame(
-            f"Client '{sanitize_for_richtext(client.client_name_or_unknown())}'"
-            " is no longer connected.",
+            "Client '"
+            f"{sanitize_for_richtext(client.client_name_or_unknown(), MAX_DISPLAY_NAME_LEN)}"
+            "' is no longer connected.",
             self.error_icon,
         )
         if self.msg_window is not None and self.msg_window.isVisible():
@@ -772,12 +797,16 @@ class SdwdateTrayIcon(QSystemTrayIcon):
         ## message is rendered as rich text. Strip markup, control / ANSI and
         ## non-ASCII characters and escape the rest so a client cannot inject
         ## markup or confusable characters into the server's GUI.
-        safe_name: str = sanitize_for_richtext(client.client_name_or_unknown())
+        safe_name: str = sanitize_for_richtext(
+            client.client_name_or_unknown(), MAX_DISPLAY_NAME_LEN
+        )
 
         if message_type == MessageType.SDWDATE:
             if client.sdwdate_msg is None:
                 return
-            safe_msg: str = sanitize_for_richtext(client.sdwdate_msg)
+            safe_msg: str = sanitize_for_richtext(
+                client.sdwdate_msg, MAX_DISPLAY_MSG_LEN
+            )
             if running_in_qubes_os():
                 msg_window = SdwdateGuiFrame(
                     "Last message from sdwdate on "

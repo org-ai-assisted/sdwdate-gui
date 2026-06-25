@@ -29,6 +29,12 @@ from .sdwdate_gui_shared import (
     parse_config_files,
 )
 
+## Maximum length of the sdwdate status message we send. The message rides a
+## wire frame the server limits to 4096 bytes behind a two-byte length
+## prefix, and the escape encoding below can quadruple the length, so cap the
+## raw message well under a quarter of that limit.
+MAX_STATUS_MSG_LEN: int = 1000
+
 
 # pylint: disable=too-few-public-methods
 class GlobalData:
@@ -315,7 +321,11 @@ async def set_client_name(name: str) -> None:
     the server will forcibly disconnect it under Qubes OS.
     """
 
-    await generic_rpc_call(b"set_client_name " + name.encode(encoding="ascii"))
+    ## The wire protocol is ASCII only; coerce so a non-ASCII host name
+    ## cannot raise UnicodeEncodeError. The server enforces the name length
+    ## limit (31 on Qubes OS, 255 otherwise).
+    name_bytes: bytes = name.encode("ascii", errors="replace")
+    await generic_rpc_call(b"set_client_name " + name_bytes)
 
 
 async def set_sdwdate_status(status: str, msg: str) -> None:
@@ -323,6 +333,13 @@ async def set_sdwdate_status(status: str, msg: str) -> None:
     RPC call from client to server. Updates the sdwdate status shown by
     the server.
     """
+
+    ## Coerce to ASCII (the wire is ASCII only, otherwise encode() below
+    ## raises) and cap the length, so a long or non-ASCII status message
+    ## cannot overflow the two-byte length prefix or get the client kicked
+    ## by the server's 4096-byte frame limit.
+    msg = msg.encode("ascii", errors="replace").decode("ascii")
+    msg = msg[:MAX_STATUS_MSG_LEN]
 
     ## Encode spaces, newlines, and backslashes into octal escapes.
     msg_copy: str = msg.replace("\\", "\\134")
