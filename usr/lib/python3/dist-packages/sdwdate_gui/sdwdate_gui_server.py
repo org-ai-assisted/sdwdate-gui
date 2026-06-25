@@ -1347,6 +1347,7 @@ class SdwdateGuiListener(QObject):
 
     newClient: pyqtSignal = pyqtSignal(SdwdateGuiClient)
 
+    # pylint: disable=too-many-statements
     def __init__(self, parent: QObject | None = None) -> None:
         """
         Initializes a listening socket.
@@ -1433,6 +1434,13 @@ class SdwdateGuiListener(QObject):
             sys.exit(1)
 
         self.server: QLocalServer = QLocalServer(self)
+        ## Restrict the IPC socket to the owning user (mode 0700) rather than
+        ## relying solely on the 0700 mode of the parent /run/user/UID
+        ## directory. On Qubes OS the gateway's qrexec Connect path reaches
+        ## this socket as either root (qrexec-agent) or the default user
+        ## (qrexec-fork-server, the socket owner), both of which can still
+        ## connect to an owner-only socket.
+        self.server.setSocketOptions(QLocalServer.UserAccessOption)
         self.server.listen(str(sdwdate_socket_file))
         self.server.newConnection.connect(self.spawn_client)
 
