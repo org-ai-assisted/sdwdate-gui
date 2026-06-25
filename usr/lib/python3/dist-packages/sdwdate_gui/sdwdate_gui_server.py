@@ -607,6 +607,11 @@ class SdwdateGuiClient(QObject):
             bytes_written: int = self.client_socket.write(
                 msg_buf[len(msg_buf) - msg_len :]
             )
+            if bytes_written <= 0:
+                ## write() returns -1 on error; 0 should not happen on a
+                ## connected local socket. Either way, stop instead of
+                ## spinning or rewinding the offset with a negative count.
+                return
             msg_len -= bytes_written
 
     def open_tor_control_panel(self) -> None:
@@ -786,10 +791,17 @@ class SdwdateTrayIcon(QSystemTrayIcon):
             self.pos_y = QCursor.pos().y() - 50
             self.clicked_once = True
 
+        ## Fall back to "Unknown" if sanitization leaves the name empty (for
+        ## example a non-Qubes name made entirely of stripped markup), so the
+        ## dialog never shows an empty 'Client ''.
+        safe_name: str = (
+            sanitize_for_richtext(
+                client.client_name_or_unknown(), MAX_DISPLAY_NAME_LEN
+            )
+            or "Unknown"
+        )
         msg_window: SdwdateGuiFrame = SdwdateGuiFrame(
-            "Client '"
-            f"{sanitize_for_richtext(client.client_name_or_unknown(), MAX_DISPLAY_NAME_LEN)}"
-            "' is no longer connected.",
+            f"Client '{safe_name}' is no longer connected.",
             self.error_icon,
         )
         if self.msg_window is not None and self.msg_window.isVisible():
@@ -829,8 +841,11 @@ class SdwdateTrayIcon(QSystemTrayIcon):
         ## message is rendered as rich text. Strip markup, control / ANSI and
         ## non-ASCII characters and escape the rest so a client cannot inject
         ## markup or confusable characters into the server's GUI.
-        safe_name: str = sanitize_for_richtext(
-            client.client_name_or_unknown(), MAX_DISPLAY_NAME_LEN
+        safe_name: str = (
+            sanitize_for_richtext(
+                client.client_name_or_unknown(), MAX_DISPLAY_NAME_LEN
+            )
+            or "Unknown"
         )
 
         if message_type == MessageType.SDWDATE:
