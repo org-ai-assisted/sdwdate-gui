@@ -1045,13 +1045,16 @@ to connect to or configure the Tor network."""
 
     def show_menu(self, event: QSystemTrayIcon.ActivationReason) -> None:
         """
-        Opens the menu on a left-click (Trigger) of the tray icon.
+        Opens the menu on either a left-click (Trigger) or a right-click
+        (Context) of the tray icon.
 
-        Right-clicking is supposed to open the menu automatically via the
-        context menu set with setContextMenu(), but that automatic context
-        menu is unreliable on some platforms (observed on Qubes OS, where it
-        frequently fails to register). Opening the menu ourselves on a plain
-        left-click gives the user a dependable way to reach it.
+        Right-clicking is also supposed to open the menu automatically via
+        the context menu set with setContextMenu(), but that automatic
+        context menu is unreliable on some platforms (observed on Qubes OS,
+        where it frequently fails to register). Opening the menu ourselves
+        on both activation reasons makes left- and right-click dependable.
+        popup() targets the same menu object the automatic handler would
+        show, so a right-click does not produce a second, separate menu.
 
         This is skipped under Wayland: a Wayland client cannot position its
         own popup at an absolute screen coordinate, so QCursor.pos() is
@@ -1062,7 +1065,10 @@ to connect to or configure the Tor network."""
 
         if QApplication.platformName() == "wayland":
             return
-        if event == QSystemTrayIcon.ActivationReason.Trigger:
+        if event in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.Context,
+        ):
             self.menu.popup(QCursor.pos())
 
     def handle_client_name_change(
