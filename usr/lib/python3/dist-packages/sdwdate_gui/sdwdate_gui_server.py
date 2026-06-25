@@ -232,6 +232,13 @@ class SdwdateGuiClient(QObject):
         self.client_name = qrexec_header_parts[1]
         self.client_name_set = True
 
+        ## Unlike the non-Qubes path (see __set_client_name), the name was not
+        ## delivered via an RPC call, so emit the signal ourselves. This lets
+        ## the server enforce the "no two clients with the same name" invariant
+        ## on Qubes OS as well, preventing a VM from being listed twice in the
+        ## menu when it reconnects before its previous connection is reaped.
+        self.clientNameChanged.emit()
+
         return True
 
     # pylint: disable=too-many-return-statements
@@ -1059,19 +1066,41 @@ to connect to or configure the Tor network."""
         kicked.
         """
 
-        name_match_count: int = 0
-        for client in self.client_list:
-            if client.client_name == sender_client.client_name:
-                name_match_count += 1
-                if name_match_count > 1:
-                    logging.warning(
-                        "Kicking client '%s' for attempting to set a name "
-                        "'%s' identical to another client's name",
-                        client.client_name_or_unknown(),
-                        client.client_name,
-                    )
-                    sender_client.kick_client()
-                    return
+        duplicate_clients: list[SdwdateGuiClient] = [
+            client
+            for client in self.client_list
+            if client is not sender_client
+            and client.client_name == sender_client.client_name
+        ]
+        if duplicate_clients:
+            if running_in_qubes_os():
+                ## On Qubes OS the client name is provided by the
+                ## authenticated qrexec subsystem, not by the client itself. A
+                ## duplicate name therefore means the same VM reconnected (for
+                ## instance because its client restarted) before the server
+                ## noticed the previous connection had dropped. Keep the new
+                ## connection and discard the stale duplicate(s), otherwise the
+                ## VM would be listed multiple times in the menu.
+                ##
+                ## kick_client() emits clientDisconnected, which triggers
+                ## drop_client() to remove the stale client and regenerate the
+                ## menu. Iterate over a copy of the matches so that mutating
+                ## client_list during the loop is safe.
+                for old_client in duplicate_clients:
+                    old_client.kick_client()
+            else:
+                ## On non-Qubes systems the name is self-reported and
+                ## untrusted, so treat a duplicate name as an impersonation
+                ## attempt and kick the newcomer, keeping the established
+                ## client.
+                logging.warning(
+                    "Kicking client '%s' for attempting to set a name "
+                    "'%s' identical to another client's name",
+                    sender_client.client_name_or_unknown(),
+                    sender_client.client_name,
+                )
+                sender_client.kick_client()
+                return
 
         self.regen_menu()
 
