@@ -156,6 +156,7 @@ class SdwdateGuiClient(QObject):
         self.tor_status: TorStatus = TorStatus.UNKNOWN
         self.qubes_header_parsed: bool = False
         self.present_in_menu: bool = False
+        self.dropped: bool = False
 
         self.__sock_buf: bytes = b""
 
@@ -251,9 +252,16 @@ class SdwdateGuiClient(QObject):
             function_name: str | None
             msg_parts: list[str] | None
             try:
+                preproc_sock_buf_len: int = len(self.__sock_buf)
                 self.__sock_buf, function_name, msg_parts = parse_ipc_command(
                     self.__sock_buf
                 )
+                if len(self.__sock_buf) == preproc_sock_buf_len:
+                    ## The buffer did not shrink, meaning only part of a
+                    ## message has arrived so far. Stop and wait for the
+                    ## rest; continuing would spin this loop forever on the
+                    ## incomplete message and hang the whole event loop.
+                    break
                 if function_name is None:
                     continue
                 assert function_name is not None
@@ -439,7 +447,7 @@ class SdwdateGuiClient(QObject):
                 self.kick_client()
                 return False
 
-            if octal_int < 0x20 or octal_int > 0x7E and octal_int != 0x0A:
+            if (octal_int < 0x20 or octal_int > 0x7E) and octal_int != 0x0A:
                 logging.warning(
                     "Kicking client '%s' for attempting to embed unsafe "
                     "character as octal escape '%s' in sdwdate status "
@@ -1143,17 +1151,24 @@ to connect to or configure the Tor network."""
         Purges a disconnected client from the client list.
         """
 
-        if not sender_client.present_in_menu:
-            sender_client.deleteLater()
-
         for idx, client in enumerate(self.client_list):
             if client == sender_client:
                 self.client_list.pop(idx)
+                if not sender_client.present_in_menu:
+                    sender_client.deleteLater()
+                sender_client.dropped = True
                 self.regen_menu()
                 self.set_tray_icon()
                 return
 
-        logging.warning("Dropped client not present in client list!")
+        ## drop_client can legitimately be called more than once for the
+        ## same client: kick_client() emits clientDisconnected, and the
+        ## socket's own disconnected() signal (wired to clientDisconnected)
+        ## fires as well. A repeat call is a harmless no-op. Only warn if the
+        ## client was never tracked at all, which would be a real bug.
+        if not sender_client.dropped:
+            logging.warning("Dropped client not present in client list!")
+        sender_client.dropped = True
 
     def accept_client(self, client: SdwdateGuiClient) -> None:
         """
