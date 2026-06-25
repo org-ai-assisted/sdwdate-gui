@@ -70,6 +70,14 @@ MAX_QUBES_NAME_LEN: int = 31
 MAX_DISPLAY_NAME_LEN: int = 255
 MAX_DISPLAY_MSG_LEN: int = 2048
 
+## Bound how many clients may be connected at once, and how long a client may
+## stay connected without completing its handshake (providing a name), so a
+## misbehaving or hostile client cannot exhaust memory or file descriptors
+## with a flood of connections or idle half-open ones. The limit is far above
+## any realistic number of VMs.
+MAX_CLIENTS: int = 64
+HANDSHAKE_TIMEOUT_MS: int = 30000
+
 
 def sanitize_for_richtext(untrusted: str, max_length: int) -> str:
     """
@@ -196,6 +204,30 @@ class SdwdateGuiClient(QObject):
 
         self.client_socket.readyRead.connect(self.__handle_incoming_data)
         self.client_socket.disconnected.connect(self.clientDisconnected.emit)
+
+        ## Kick a client that connects but never completes its handshake by
+        ## providing a name, so half-open / idle connections cannot
+        ## accumulate. The timer is stopped as soon as the name is set.
+        self.handshake_timer: QTimer = QTimer(self)
+        self.handshake_timer.setSingleShot(True)
+        self.handshake_timer.timeout.connect(self.__handshake_timeout)
+        self.clientNameChanged.connect(self.handshake_timer.stop)
+        self.handshake_timer.start(HANDSHAKE_TIMEOUT_MS)
+
+    def __handshake_timeout(self) -> None:
+        """
+        Kick a still-connected client that never set its name in time.
+        """
+
+        if self.client_name_set:
+            return
+        if self.client_socket.state() != QLocalSocket.ConnectedState:
+            return
+        logging.warning(
+            "Kicking client '%s' for not completing its handshake in time",
+            self.client_name_or_unknown(),
+        )
+        self.kick_client()
 
     def client_name_or_unknown(self) -> str:
         """
@@ -1240,6 +1272,20 @@ to connect to or configure the Tor network."""
         """
         Adds a new client to the client list.
         """
+
+        if len(self.client_list) >= MAX_CLIENTS:
+            ## Reject the connection before wiring it up, so a flood of
+            ## connections cannot exhaust memory or file descriptors. Kick
+            ## first (clientDisconnected is not connected to drop_client yet,
+            ## so this does not log a spurious "not present" warning), then
+            ## free the untracked object.
+            logging.warning(
+                "Rejecting new client; already at the %d client limit",
+                MAX_CLIENTS,
+            )
+            client.kick_client()
+            client.deleteLater()
+            return
 
         self.client_list.append(client)
         client.clientNameChanged.connect(
