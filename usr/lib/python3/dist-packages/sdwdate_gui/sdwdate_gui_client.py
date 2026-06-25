@@ -25,6 +25,7 @@ import pyinotify  # type: ignore
 
 from .sdwdate_gui_shared import (
     ConfigData,
+    MAX_FRAME_SIZE,
     parse_ipc_command,
     parse_config_files,
 )
@@ -210,22 +211,22 @@ async def try_parse_commands() -> None:
                 if len(msg_parts) != 0:
                     await kick_server()
                     return
-                open_tor_control_panel()
+                await open_tor_control_panel()
             case "open_sdwdate_log":
                 if len(msg_parts) != 0:
                     await kick_server()
                     return
-                open_sdwdate_log()
+                await open_sdwdate_log()
             case "restart_sdwdate":
                 if len(msg_parts) != 0:
                     await kick_server()
                     return
-                restart_sdwdate()
+                await restart_sdwdate()
             case "stop_sdwdate":
                 if len(msg_parts) != 0:
                     await kick_server()
                     return
-                stop_sdwdate()
+                await stop_sdwdate()
             case "suppress_client_reconnect":
                 if len(msg_parts) != 0:
                     await kick_server()
@@ -252,36 +253,37 @@ async def handle_incoming_data() -> bool:
 
 
 ## SERVER-TO-CLIENT RPC CALLS
-def open_tor_control_panel() -> None:
+## These launch a helper and return without waiting. asyncio's child watcher
+## reaps the process when it exits, so unlike a fire-and-forget
+## subprocess.Popen() they do not leave a zombie behind.
+async def open_tor_control_panel() -> None:
     """
     RPC call from server to client. Opens Tor Control Panel.
     """
-    # pylint: disable=consider-using-with
-    subprocess.Popen(["/usr/bin/tor-control-panel"], shell=False)
+    await asyncio.create_subprocess_exec("/usr/bin/tor-control-panel")
 
 
-def open_sdwdate_log() -> None:
+async def open_sdwdate_log() -> None:
     """
     RPC call from server to client. Opens the sdwdate log in a terminal.
     """
-    # pylint: disable=consider-using-with
-    subprocess.Popen(["/usr/libexec/sdwdate-gui/log-viewer"], shell=False)
+    await asyncio.create_subprocess_exec(
+        "/usr/libexec/sdwdate-gui/log-viewer"
+    )
 
 
-def restart_sdwdate() -> None:
+async def restart_sdwdate() -> None:
     """
     RPC call from server to client. Restarts the sdwdate service.
     """
-    # pylint: disable=consider-using-with
-    subprocess.Popen(["leaprun", "sdwdate-clock-jump"], shell=False)
+    await asyncio.create_subprocess_exec("leaprun", "sdwdate-clock-jump")
 
 
-def stop_sdwdate() -> None:
+async def stop_sdwdate() -> None:
     """
     RPC call from server to client. Stops the sdwdate service.
     """
-    # pylint: disable=consider-using-with
-    subprocess.Popen(["leaprun", "stop-sdwdate"], shell=False)
+    await asyncio.create_subprocess_exec("leaprun", "stop-sdwdate")
 
 
 def suppress_client_reconnect() -> None:
@@ -301,6 +303,12 @@ async def generic_rpc_call(msg_bytes: bytes) -> None:
 
     assert GlobalData.sock_write is not None
     msg_len: int = len(msg_bytes)
+    if msg_len > MAX_FRAME_SIZE:
+        ## The receiver rejects an over-limit frame, and a length above 65535
+        ## would not even fit the two-byte prefix. Callers already bound what
+        ## they send; refuse here too rather than emit a doomed frame.
+        logging.error("Refusing to send oversized IPC message")
+        return
     msg_buf: bytes = (
         msg_len.to_bytes(2, byteorder="big", signed=False) + msg_bytes
     )

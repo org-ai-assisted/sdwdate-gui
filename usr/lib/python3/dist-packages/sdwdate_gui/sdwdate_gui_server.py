@@ -55,6 +55,7 @@ from sanitize_string.sanitize_string_lib import sanitize_string
 
 from .sdwdate_gui_shared import (
     ConfigData,
+    MAX_FRAME_SIZE,
     check_bytes_printable,
     parse_ipc_command,
     parse_config_files,
@@ -597,6 +598,13 @@ class SdwdateGuiClient(QObject):
         """
 
         msg_len: int = len(msg_bytes)
+        if msg_len > MAX_FRAME_SIZE:
+            ## Server-to-client messages are short fixed strings today, but
+            ## enforce the protocol frame limit on send too (a length above
+            ## 65535 would not even fit the two-byte prefix), symmetric with
+            ## the receiver's check, so a future RPC cannot emit a bad frame.
+            logging.error("Refusing to send oversized IPC message")
+            return
         msg_buf: bytes = (
             msg_len.to_bytes(2, byteorder="big", signed=False) + msg_bytes
         )

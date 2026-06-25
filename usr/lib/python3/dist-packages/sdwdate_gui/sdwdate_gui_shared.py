@@ -40,6 +40,14 @@ class ConfigData:
     conf_dict: dict[str, Any] = {}
 
 
+## Maximum size of a single IPC message body (the bytes after the two-byte
+## length prefix). The wire length prefix is two bytes, so a message could in
+## principle be up to 65535 bytes, but sdwdate-gui messages are never even
+## close to 4 KiB. The receiver rejects anything larger; senders enforce the
+## same limit so they never emit a frame the peer would reject.
+MAX_FRAME_SIZE: int = 4096
+
+
 def check_bytes_printable(buf: bytes) -> bool:
     """
     Checks if all bytes in the provided buffer are printable ASCII.
@@ -61,8 +69,7 @@ def parse_ipc_command(
     """
 
     msg_len: int = int.from_bytes(sock_buf[:2], byteorder="big", signed=False)
-    ## Messages should never be even close to 4 KiB in length.
-    if msg_len > 4096:
+    if msg_len > MAX_FRAME_SIZE:
         raise ValueError("Message length too long")
     if len(sock_buf) < (msg_len + 2):
         return sock_buf, None, None
