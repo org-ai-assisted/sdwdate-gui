@@ -1455,7 +1455,24 @@ def install_tray_when_available(app: QApplication) -> QTimer:
     listener: SdwdateGuiListener = SdwdateGuiListener()
     ## Clients arriving before the tray exists are held here, then replayed.
     pending_clients: list[SdwdateGuiClient] = []
-    listener.newClient.connect(pending_clients.append)
+
+    def buffer_client(client: SdwdateGuiClient) -> None:
+        ## Mirror accept_client's MAX_CLIENTS cap while buffering: if no tray
+        ## host ever appears the replay never runs, so without this bound a
+        ## flood of (validly handshaken) clients would accumulate sockets and
+        ## client objects without limit. The handshake timer only bounds
+        ## clients that never name themselves.
+        if len(pending_clients) >= MAX_CLIENTS:
+            logging.warning(
+                "Rejecting new client; already at the %d client limit",
+                MAX_CLIENTS,
+            )
+            client.kick_client()
+            client.deleteLater()
+            return
+        pending_clients.append(client)
+
+    listener.newClient.connect(buffer_client)
 
     ## A list, rather than a plain variable, so the nested callback can
     ## record the constructed tray icon without a 'nonlocal' rebind.
@@ -1480,9 +1497,17 @@ def install_tray_when_available(app: QApplication) -> QTimer:
         ## Stop buffering and replay whatever arrived before the tray
         ## existed. No event loop runs between construction and here, so no
         ## client is missed or handled twice.
-        listener.newClient.disconnect(pending_clients.append)
+        listener.newClient.disconnect(buffer_client)
         for client in pending_clients:
             tray.accept_client(client)
+            ## A buffered client can finish its handshake (set its name,
+            ## emit clientNameChanged) before accept_client wires that
+            ## signal, so the duplicate-name policy in
+            ## handle_client_name_change would be skipped for it. Re-apply
+            ## it on replay for any client that is already named and was
+            ## actually admitted (accept_client drops it if over the cap).
+            if client.client_name is not None and client in tray.client_list:
+                tray.handle_client_name_change(client)
         pending_clients.clear()
         tray.show()
 
