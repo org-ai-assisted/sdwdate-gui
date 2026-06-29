@@ -721,9 +721,19 @@ class SdwdateTrayIcon(QSystemTrayIcon):
     configuring certain aspects of both services on the client side.
     """
 
-    def __init__(self, parent: QObject | None = None):
+    def __init__(
+        self,
+        parent: QObject | None = None,
+        listener: "SdwdateGuiListener | None" = None,
+    ):
         """
         Initializes the tray icon.
+
+        If 'listener' is provided, the tray adopts that already-running
+        SdwdateGuiListener (its IPC socket is already up) instead of
+        creating one. This lets the server bring the listener up promptly
+        at startup while deferring tray-icon construction until a system
+        tray host appears, without delaying the socket.
         """
 
         QSystemTrayIcon.__init__(self, parent)
@@ -777,7 +787,11 @@ class SdwdateTrayIcon(QSystemTrayIcon):
         self.setContextMenu(self.menu)
         self.activated.connect(self.show_menu)
 
-        self.listener: SdwdateGuiListener = SdwdateGuiListener(self)
+        if listener is None:
+            self.listener: SdwdateGuiListener = SdwdateGuiListener(self)
+        else:
+            self.listener = listener
+            self.listener.setParent(self)
         self.listener.newClient.connect(self.accept_client)
 
     def show_disconnected_msg(
@@ -1410,7 +1424,8 @@ def signal_handler(sig: int, frame: FrameType | None) -> None:
 
 def install_tray_when_available(app: QApplication) -> QTimer:
     """
-    Create and show the tray icon once a system tray host is available.
+    Bring the IPC listener up now, but defer the tray icon until a system
+    tray host is available.
 
     QSystemTrayIcon selects its backend (legacy XEmbed vs. the
     StatusNotifier / SNI D-Bus protocol) when it is constructed. If
@@ -1420,14 +1435,27 @@ def install_tray_when_available(app: QApplication) -> QTimer:
     host and sdwdate-gui are launched together -- Qt falls back to XEmbed,
     and an SNI-only panel (lxqt-panel, waybar) never shows the icon.
     Re-showing, or calling show() again after the host appears, does not
-    recover it; only deferring construction does. The sdwdate-gui-client
-    blocks until the server socket appears, so deferring the tray icon (and
-    the listener it owns) loses no clients.
+    recover it; only deferring construction does.
+
+    The listener (and thus the server's IPC socket) must NOT be deferred:
+    on Qubes the gateway's sdwdate-gui-qubes-proxy-helper waits only a
+    bounded time for the socket before giving up, so a late or absent tray
+    host must not delay it. So the listener is created immediately; clients
+    that connect before the tray exists are buffered and replayed once it
+    is constructed (a client completes its handshake over its own socket
+    regardless, so buffering only delays its menu entry, not the protocol).
 
     The poll timer is parented to 'app' so it (and the tray icon kept alive
     through its callback) outlives this function; the timer is also returned
     for callers, such as the test suite, that want a direct reference.
     """
+
+    ## Eager: the IPC socket and PID file come up now, independent of any
+    ## tray host (see the Qubes proxy-helper note above).
+    listener: SdwdateGuiListener = SdwdateGuiListener()
+    ## Clients arriving before the tray exists are held here, then replayed.
+    pending_clients: list[SdwdateGuiClient] = []
+    listener.newClient.connect(pending_clients.append)
 
     ## A list, rather than a plain variable, so the nested callback can
     ## record the constructed tray icon without a 'nonlocal' rebind.
@@ -1439,10 +1467,24 @@ def install_tray_when_available(app: QApplication) -> QTimer:
             return
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
-        poll_timer.stop()
-        tray: SdwdateTrayIcon = SdwdateTrayIcon()
-        tray.show()
+        ## Construct first: if this raises, nothing else has changed, so
+        ## the next tick retries cleanly (clients stay buffered, timer
+        ## stays running).
+        tray: SdwdateTrayIcon = SdwdateTrayIcon(listener=listener)
+        ## Commit before the one-time, non-idempotent buffer handoff:
+        ## recording the tray and stopping the timer guarantee attempt()
+        ## never runs its body twice, so the disconnect() below can never
+        ## fire on an already-disconnected signal.
         tray_holder.append(tray)
+        poll_timer.stop()
+        ## Stop buffering and replay whatever arrived before the tray
+        ## existed. No event loop runs between construction and here, so no
+        ## client is missed or handled twice.
+        listener.newClient.disconnect(pending_clients.append)
+        for client in pending_clients:
+            tray.accept_client(client)
+        pending_clients.clear()
+        tray.show()
 
     poll_timer.timeout.connect(attempt)
     poll_timer.start(500)
