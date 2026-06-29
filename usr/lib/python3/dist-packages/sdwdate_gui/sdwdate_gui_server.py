@@ -1408,6 +1408,49 @@ def signal_handler(sig: int, frame: FrameType | None) -> None:
     sys.exit(128 + sig)
 
 
+def install_tray_when_available(app: QApplication) -> QTimer:
+    """
+    Create and show the tray icon once a system tray host is available.
+
+    QSystemTrayIcon selects its backend (legacy XEmbed vs. the
+    StatusNotifier / SNI D-Bus protocol) when it is constructed. If
+    sdwdate-gui-server is constructed before the panel's
+    StatusNotifierWatcher has registered on the session bus -- a startup
+    race, e.g. in the user-sysmaint-split sysmaint session, where the tray
+    host and sdwdate-gui are launched together -- Qt falls back to XEmbed,
+    and an SNI-only panel (lxqt-panel, waybar) never shows the icon.
+    Re-showing, or calling show() again after the host appears, does not
+    recover it; only deferring construction does. The sdwdate-gui-client
+    blocks until the server socket appears, so deferring the tray icon (and
+    the listener it owns) loses no clients.
+
+    The poll timer is parented to 'app' so it (and the tray icon kept alive
+    through its callback) outlives this function; the timer is also returned
+    for callers, such as the test suite, that want a direct reference.
+    """
+
+    ## A list, rather than a plain variable, so the nested callback can
+    ## record the constructed tray icon without a 'nonlocal' rebind.
+    tray_holder: list[SdwdateTrayIcon] = []
+    poll_timer: QTimer = QTimer(app)
+
+    def attempt() -> None:
+        if tray_holder:
+            return
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        poll_timer.stop()
+        tray: SdwdateTrayIcon = SdwdateTrayIcon()
+        tray.show()
+        tray_holder.append(tray)
+
+    poll_timer.timeout.connect(attempt)
+    poll_timer.start(500)
+    ## Try immediately; the common case is a tray host already present.
+    attempt()
+    return poll_timer
+
+
 def main() -> NoReturn:
     """
     Main function.
@@ -1455,7 +1498,6 @@ def main() -> NoReturn:
     timer.start(500)
     timer.timeout.connect(lambda: None)
 
-    sdwdate_tray: SdwdateTrayIcon = SdwdateTrayIcon()
-    sdwdate_tray.show()
+    install_tray_when_available(app)
     app.exec_()
     sys.exit(0)
