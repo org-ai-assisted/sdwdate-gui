@@ -3,32 +3,46 @@
 ## Copyright (C) 2016 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
 
+## Keep the command trace: it is this script's diagnostic output.
 set -x
-set -e
+set -o errexit
+set -o nounset
+set -o pipefail
+set -o errtrace
+shopt -s inherit_errexit
+shopt -s shift_verbose
 
 counter=0
+
+## Assigned only once the counter reaches its limit, but read on EVERY
+## iteration by the loop-exit test below -- so it must start out empty, which
+## is what it expanded to before strict mode.
+do_break=""
 
 while true ; do
    for icon in success busy error ; do
       msg="$(cat /proc/sys/kernel/random/uuid)"
 
+      ## The shell interpolates into the Python source below. Both values are
+      ## generated here -- icon from the literal loop list, msg from the
+      ## kernel's UUID source -- so neither is attacker-controlled.
       sudo -u sdwdate python3 -u -c "
 import json
 status = {'icon': '', 'message': ''}
-status['icon'] = '$icon'
-status['message'] = '$msg $msg $msg'
+status['icon'] = '${icon}'
+status['message'] = '${msg} ${msg} ${msg}'
 with open(\"/run/sdwdate/status\", 'w') as f:
     json.dump(status, f)
       "
 
       counter=$(( counter + 1 ))
-      if [ "$counter" -ge 10000 ]; then
+      if [ "${counter}" -ge 10000 ]; then
          do_break=true
       fi
 
       #sleep 1
    done
-   if [ "$do_break" = "true" ]; then
+   if [ "${do_break}" = "true" ]; then
       break
    fi
 done

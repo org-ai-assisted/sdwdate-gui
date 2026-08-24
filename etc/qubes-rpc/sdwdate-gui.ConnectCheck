@@ -13,6 +13,16 @@
 ## * 'q' - No, sdwdate-gui.Connect qrexec endpoint is not ready to use and
 ##         will not become available later, therefore the caller should exit.
 
+set -o errexit
+set -o nounset
+set -o pipefail
+set -o errtrace
+shopt -s inherit_errexit
+shopt -s shift_verbose
+
+## Every failure here means "the caller should give up", which is 'q' on stdout
+## and exit 0 -- so the failures are handled explicitly rather than left to
+## errexit, which would exit non-zero with no verdict for the caller to read.
 uid="$(id -u)" || { printf '%s\n' 'q'; exit 0; }
 sdwdate_gui_tmp_dir="/run/user/${uid}/sdwdate-gui"
 
@@ -33,10 +43,21 @@ else
     printf '%s\n' 'n'
     exit 0
   fi
+  ## Left as a substitution inside the test: errexit does not apply to a
+  ## condition, so a failing config-read yields an empty string, misses the
+  ## 'false' comparison and falls through to the 'q' verdict below -- which is
+  ## the right answer. Verified, not assumed: reverting the defensive rewrite
+  ## changed no test result.
   if [ "$(/usr/libexec/sdwdate-gui/sdwdate-gui-config-read 'disable')" = 'false' ]; then
     ## If the server is enabled, tell the caller to keep waiting and cache this
     ## fact so we don't have to re-parse the configuration file over and over.
-    touch "${sdwdate_gui_tmp_dir}/proxy-should-run"
+    ## '|| true': the cache is an OPTIMISATION -- it saves re-parsing the
+    ## config on the next poll. A read-only or full /run must not stop this
+    ## script emitting its verdict, and under errexit a failing touch aborted
+    ## with NO output at all, leaving the caller with nothing to act on. That
+    ## contradicts this file's whole contract: always one of y, n or q on
+    ## stdout.
+    touch -- "${sdwdate_gui_tmp_dir}/proxy-should-run" || true
     printf '%s\n' 'n'
     exit 0
   fi

@@ -14,36 +14,40 @@
 ## sdwdate-gui-qubes@.socket units, enabling sdwdate-gui-client to communicate
 ## with the server on the gateway.
 
-#set -x
-set -e
+set -o errexit
+set -o nounset
+set -o pipefail
+set -o errtrace
+shopt -s inherit_errexit
+shopt -s shift_verbose
 
 socket_check_counter=0
 
 qubes_server_permitted="$(/usr/libexec/sdwdate-gui/sdwdate-gui-config-read 'run_server_in_qubes')" || exit 1
 default_user="$(qubesdb-read /default-user)" || exit 1
-default_user_uid="$(id -u "$default_user")" || exit 1
-server_sock_path="/run/user/$default_user_uid/sdwdate-gui/sdwdate-gui-server.socket"
+default_user_uid="$(id -u "${default_user}")" || exit 1
+server_sock_path="/run/user/${default_user_uid}/sdwdate-gui/sdwdate-gui-server.socket"
 
-if [ "$qubes_server_permitted" != 'true' ]; then
+if [ "${qubes_server_permitted}" != 'true' ]; then
   true "INFO: $0: Running on Qubes, but not supposed to run server in this VM. Enabling server proxy and exiting, ok."
-  touch /run/sdwdate-gui-qubes-should-proxy
+  touch -- /run/sdwdate-gui-qubes-should-proxy
   exit 0
 else
   server_disabled="$(/usr/libexec/sdwdate-gui/sdwdate-gui-config-read 'disable')" || exit 1
-  if [ "$server_disabled" = 'true' ]; then
+  if [ "${server_disabled}" = 'true' ]; then
     true "INFO: $0: Running on Qubes, but server disabled. Exiting, ok."
-    exit 0;
+    exit 0
   fi
   true "INFO: $0: Running on Qubes, and server enabled."
   while (( socket_check_counter < 20 )); do
     sleep 1
     (( socket_check_counter += 1 )) || true
-    true "INFO: $0: Check if '$server_sock_path' socket file already exists..."
-    if [ -S "$server_sock_path" ]; then
-      true "INFO: $0: socket file '$server_sock_path' exists: yes"
-      ln -s "$server_sock_path" '/run/qubes-rpc/sdwdate-gui.Connect'
+    true "INFO: $0: Check if '${server_sock_path}' socket file already exists..."
+    if [ -S "${server_sock_path}" ]; then
+      true "INFO: $0: socket file '${server_sock_path}' exists: yes"
+      ln -s -- "${server_sock_path}" '/run/qubes-rpc/sdwdate-gui.Connect'
       break
     fi
-    true "INFO: $0: socket file '$server_sock_path' exists: no"
+    true "INFO: $0: socket file '${server_sock_path}' exists: no"
   done
 fi
