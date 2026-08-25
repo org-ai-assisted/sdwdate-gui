@@ -1,3 +1,174 @@
+commit 4618bf68d8e9d545232861a1eb253a6dffb98d65
+Merge: aad7e9f 0dbf05d
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Mon Aug 24 02:40:06 2026 -0400
+
+    Merge remote-tracking branch 'refs/remotes/org-ai-assisted/ai'
+
+commit 0dbf05da10b17fd60fa9b0a535371fd82de805c5
+Author: claude (dev163 38f9745c-aed1-4fb4-b6ae-9899f20f8de2) <noreply@anthropic.com>
+Date:   Sat Aug 8 00:46:04 2026 -0400
+
+    ai-review-todo: all pending reviews completed
+
+    ai-review removes this file when nothing is left pending. The coderabbit
+    backlog drained, so the entries it tracked are done.
+
+commit e935f2a1395dc0f8ef24f9955b7123552c1285a8
+Author: claude (dev163 38f9745c-aed1-4fb4-b6ae-9899f20f8de2) <noreply@anthropic.com>
+Date:   Fri Aug 7 14:53:13 2026 -0400
+
+    restore 'set -x' dropped by the strict-mode pass
+
+    The R-010 conversion replaced each script's existing preamble wholesale and did
+    not carry 'set -x' across. That is a silent loss of diagnostic output, and for
+    several of these it is the only output there is:
+
+    - build-time scripts (hardened-kernel build / download / ci_test, tirdad
+      build.sh, initializer-dist chroot-scripts-post.d): the trace IS the build log,
+      so a failing invocation and its expanded arguments become unavailable exactly
+      when they are needed.
+    - boot-time scripts (libvirt-dist, repository-dist-initializer).
+    - scripts whose only messages are 'true "INFO: ..."' lines, which produce
+      nothing on their own -- removing xtrace silences them completely.
+    - test harnesses (tb-updater unit_test, sdwdate-gui fuzzer), where the trace is
+      the point.
+
+    It was also inconsistent: initializer-dist's 80_cleanup kept it while its four
+    siblings in the same directory lost it.
+
+    Nothing asked for this and no commit described it as intentional, so it is
+    restored everywhere it was active.
+
+    Found by codex on initializer-dist. The other 19 files came from auditing the
+    whole pass for the same pattern.
+
+    Testing
+    -------
+
+    Gate exit 0 in an ISOLATED checkout, all eleven packages.
+
+    Audit: ~/strict-pass-tests/audit-stripped-setx.sh, which compares every file
+    changed on an 'ai' branch against org-ai-assisted/master and reports any that
+    had 'set -x' and no longer do.
+
+      before:  examined 43 package(s) on branch ai, 342 changed file(s); 23 stripped
+      after:   examined 43 package(s) on branch ai, 342 changed file(s);  0 stripped
+
+    The audit prints its own coverage, and fails outright if it examines zero
+    packages. Its first version tested '[ -d "$pkg/.git" ]', which is false for a
+    submodule -- .git is a FILE there -- so it skipped all 43 and reported nothing
+    stripped. A count that can be read is the difference between "clean" and "never
+    looked".
+
+commit 4ee7ccbbf0e1e9e443ea36eaaf2cbd3cb72d35ab
+Author: claude (dev163 38f9745c-aed1-4fb4-b6ae-9899f20f8de2) <noreply@anthropic.com>
+Date:   Fri Aug 7 12:39:19 2026 -0400
+
+    sdwdate-gui: ConnectCheck must always emit a verdict, even when the cache write fails
+
+    An ai-review pass found that the cache 'touch' in
+    etc/qubes-rpc/sdwdate-gui.ConnectCheck was left unguarded under the errexit
+    this pass added.
+
+    That file's contract is that it ALWAYS prints one of 'y', 'n' or 'q' on stdout
+    -- a caller polls it and acts on the letter. The cache write is only an
+    optimisation: it saves re-parsing the configuration on the next poll. But under
+    errexit a failing touch -- /run read-only, out of space, out of inodes --
+    aborted the script with NO output at all, leaving the caller nothing to act on.
+
+    The contract was stated explicitly in this file's own strict-mode commit
+    ("Every failure here means 'the caller should give up', which is 'q' on stdout
+    and exit 0 -- so the failures are handled explicitly rather than left to
+    errexit") and then this one call was left out of it.
+
+    Testing
+    -------
+
+    Gate exit 0 in an ISOLATED checkout.
+
+      12 pass, 0 fail
+
+    One case added, for the state that actually breaks it: the cache directory
+    present but NOT WRITABLE. The script must still answer 'n'.
+
+    Canary: reverting just the '|| true' gives 11 pass, 1 fail on exactly that
+    case.
+
+commit 3d29e61c3035824ee8274fb5ba63615acf2f0f83
+Merge: 00788ec aad7e9f
+Author: claude (dev163 38f9745c-aed1-4fb4-b6ae-9899f20f8de2) <noreply@anthropic.com>
+Date:   Fri Aug 7 12:31:43 2026 -0400
+
+    Merge org-ai-assisted/master into ai
+
+    The branch was created from a stale local master, so its PR diff showed
+    master's newer commits -- including a changelog version bump -- as REMOVALS.
+    Merging rather than rebasing, per the no-history-rewrites rule.
+
+commit 00788ecc9449175fc133371936953d5f31dd52a5
+Author: claude (dev163 38f9745c-aed1-4fb4-b6ae-9899f20f8de2) <noreply@anthropic.com>
+Date:   Fri Aug 7 09:38:58 2026 -0400
+
+    sdwdate-gui: R-010 strict mode for the 5 standalone scripts
+
+    Files: etc/qubes-rpc/sdwdate-gui.ConnectCheck, usr/bin/sdwdate-gui,
+    usr/libexec/sdwdate-gui/{log-viewer,sdwdate-gui-qubes-proxy-helper},
+    usr/share/sdwdate-gui/unit-test/fuzzer.
+
+    Real nounset trap
+    -----------------
+
+    fuzzer read do_break on EVERY loop iteration but assigned it only once the
+    counter reached 10000, so under nounset it aborted on the first pass instead of
+    running the fuzz loop at all. Initialised to empty, which is what it expanded
+    to before.
+
+    Also
+    ----
+
+    - 'set -x' removed from log-viewer, which had left tracing on in production
+      output.
+    - Braces on the variables the fuzzer interpolates into its inline Python, plus
+      a note that both values are generated locally rather than attacker-controlled.
+    - 'touch' and 'ln -s' given '--' before their operands.
+    - ':' after 'exit 0' dropped in the proxy helper.
+
+    Deliberately NOT changed
+    ------------------------
+
+    ConnectCheck's "$(sdwdate-gui-config-read 'disable')" stays inside its test. A
+    defensive rewrite that read it into a variable first was written, tested, and
+    then REVERTED: errexit does not apply to a condition, so a failing config-read
+    yields an empty string, misses the 'false' comparison and falls through to the
+    'q' verdict -- which is already the correct answer. The rewrite changed no test
+    result, so it was only noise in the diff.
+
+    Testing
+    -------
+
+    Gate exit 0 in an ISOLATED checkout.
+
+    New harness at ~/strict-pass-tests/sgui-test/. None of these scripts can run
+    for real off Qubes, so qubesdb, qrexec, leaprun, sudo and the terminal are
+    stubbed on PATH and the hard-coded absolute paths are redirected into a fake
+    root, which makes their own control flow observable. 11 cases: all three
+    ConnectCheck verdicts plus its cache short-circuit and its config-read-failure
+    path, the proxy helper's three exits, log-viewer, sdwdate-gui and the fuzzer.
+
+      pre-change:  11 pass, 0 fail
+      post-change: 11 pass, 0 fail
+
+    Canary: with the do_break initialisation removed but strict mode kept, the
+    harness reports 10 pass, 1 fail -- so the fuzzer case genuinely tests the fix
+    rather than passing regardless.
+
+commit aad7e9fc371795235155f907494dbb6ec8aaa292
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Sat Aug 1 08:41:56 2026 +0000
+
+    bumped changelog version
+
 commit b00b12dbf76bbd3865f081ce0ed1ce6b482c6df3
 Merge: be484bb a7d5b1c
 Author: Patrick Schleizer <adrelanos@whonix.org>
