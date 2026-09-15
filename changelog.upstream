@@ -1,3 +1,42 @@
+commit 4b74e6986216b8f5fccfdcfbc3f0a8bf589951e9
+Merge: fafd8e5 f2e749f
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Sat Sep 12 09:46:00 2026 -0400
+
+    Merge remote-tracking branch 'refs/remotes/ArrayBolt3/arraybolt3/trixie'
+
+commit f2e749f2d8bc1b97d685a5143f32605b68cdc504
+Merge: fafd8e5 0415744
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Fri Sep 11 19:26:32 2026 -0400
+
+    Merge branch 'ai' into arraybolt3/trixie
+
+commit 0415744bea93e38a82206a8c8b5a7462bdac8648
+Author: claude (dev497 5326191d-88cb-4f38-a96b-e4d8ae5649d3) <noreply@anthropic.com>
+Date:   Wed Sep 9 07:57:12 2026 -0400
+
+    log-viewer: pass separate args to terminal-wrapper
+
+    - terminal-wrapper forwards its args verbatim to the terminal's '--execute',
+      so 'terminal-wrapper "leaprun sdwdate-log-viewer"' (one quoted string) is
+      exec'd as a single bogus program name and the log window never opens. Pass
+      'leaprun sdwdate-log-viewer' as separate tokens, matching every other caller.
+    - Add the missing 'export LC_ALL=C' to complete the strict-mode block (R-010).
+
+commit 1c309936d09865c84904c08837f0a2204d227f64
+Merge: 0dbf05d fafd8e5
+Author: claude <noreply@anthropic.com>
+Date:   Tue Sep 8 13:15:40 2026 -0400
+
+    Merge branch 'master' into ai
+
+commit fafd8e5b339ef4ed250be867516c8d362e3e4c07
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Sun Sep 6 16:48:45 2026 +0000
+
+    bumped changelog version
+
 commit 6cd18c3d5e7cd14128f112d36c738f9c007b6050
 Merge: eb6e63f 9803b9b
 Author: Patrick Schleizer <adrelanos@whonix.org>
