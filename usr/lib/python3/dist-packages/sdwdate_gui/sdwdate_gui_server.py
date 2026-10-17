@@ -1,4 +1,4 @@
-#!/usr/bin/python3 -su
+#!/usr/bin/python3 -Bsu
 
 ## Copyright (C) 2015 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
@@ -18,6 +18,7 @@ import signal
 import re
 import functools
 import logging
+import faulthandler
 
 from enum import Enum
 from typing import NoReturn, Pattern, Callable
@@ -56,7 +57,7 @@ from .sdwdate_gui_shared import (
     ConfigData,
     MAX_MSG_SIZE,
     check_bytes_printable,
-    parse_ipc_command,
+    parse_ipc_buf,
     parse_config_files,
 )
 
@@ -105,9 +106,9 @@ class TorStatus(Enum):
     """
 
     RUNNING = 0
-    STOPPED = 1
-    DISABLED = 2
-    DISABLED_RUNNING = 3
+    DISABLED_RUNNING = 1
+    STOPPED = 2
+    DISABLED = 3
     ABSENT = 0xFE
     UNKNOWN = 0xFF
 
@@ -312,36 +313,22 @@ class SdwdateGuiClient(QObject):
         Tries to run any commands in the buffer.
         """
 
-        while len(self.__sock_buf) >= 2:
-            function_name: str | None
-            msg_parts: list[str] | None
-            try:
-                preproc_sock_buf_len: int = len(self.__sock_buf)
-                self.__sock_buf, function_name, msg_parts = parse_ipc_command(
-                    self.__sock_buf
-                )
-                postproc_sock_buf_len: int = len(self.__sock_buf)
-                if preproc_sock_buf_len == postproc_sock_buf_len:
-                    ## If the buffer didn't shrink, that means that we've only
-                    ## received part of a message. Break so that we can receive
-                    ## the rest of it later on.
-                    break
-                if function_name is None:
-                    continue
-                assert function_name is not None
-                assert msg_parts is not None
-            except ValueError:
-                logging.warning(
-                    "Kicking client '%s' for sending invalid bytes in "
-                    "command buffer",
-                    self.client_name_or_unknown(),
-                )
-                self.kick_client()
-                return
+        msg_list: list[list[str]]
+        try:
+            self.__sock_buf, msg_list = parse_ipc_buf(self.__sock_buf)
+        except ValueError:
+            logging.warning(
+                "Kicking client '%s' for sending invalid bytes in "
+                "command buffer",
+                self.client_name_or_unknown(),
+            )
+            self.kick_client()
+            return
 
-            match function_name:
+        for msg_parts in msg_list:
+            match msg_parts[0]:
                 case "set_client_name":
-                    if len(msg_parts) != 1:
+                    if len(msg_parts) != 2:
                         logging.warning(
                             "Kicking client '%s' for sending incorrect "
                             "number of arguments for 'set_client_name' "
@@ -350,10 +337,10 @@ class SdwdateGuiClient(QObject):
                         )
                         self.kick_client()
                         return
-                    if not self.__set_client_name(msg_parts[0]):
+                    if not self.__set_client_name(msg_parts[1]):
                         return
                 case "set_sdwdate_status":
-                    if len(msg_parts) != 2:
+                    if len(msg_parts) != 3:
                         logging.warning(
                             "Kicking client '%s' for sending incorrect "
                             "number of arguments for 'set_sdwdate_status' "
@@ -363,11 +350,11 @@ class SdwdateGuiClient(QObject):
                         self.kick_client()
                         return
                     if not self.__set_sdwdate_status(
-                        msg_parts[0], msg_parts[1]
+                        msg_parts[1], msg_parts[2]
                     ):
                         return
                 case "set_tor_status":
-                    if len(msg_parts) != 1:
+                    if len(msg_parts) != 2:
                         logging.warning(
                             "Kicking client '%s' for sending incorrect "
                             "number of arguments for 'set_tor_status' "
@@ -376,7 +363,7 @@ class SdwdateGuiClient(QObject):
                         )
                         self.kick_client()
                         return
-                    if not self.__set_tor_status(msg_parts[0]):
+                    if not self.__set_tor_status(msg_parts[1]):
                         return
                 case _:
                     self.kick_client()
@@ -743,9 +730,9 @@ class SdwdateTrayIcon(QSystemTrayIcon):
         self.error_icon: QIcon = QIcon(self.icon_path + "error.png")
         self.tor_icon_list: list[QIcon] = [
             QIcon(self.icon_path + "tor-ok.png"),
-            self.error_icon,
-            self.error_icon,
             QIcon(self.icon_path + "tor-warning.png"),
+            self.error_icon,
+            self.error_icon,
         ]
         self.sdwdate_icon_list: list[QIcon] = [
             QIcon(self.icon_path + "sdwdate-success.png"),
@@ -1106,7 +1093,7 @@ to connect to or configure the Tor network."""
             "&Exit",
             self.menu,
         )
-        action.triggered.connect(sys.exit)
+        action.triggered.connect(self.exit_on_user_request)
         self.menu.addAction(action)
         self.menu_action_list.append(action)
 
@@ -1284,6 +1271,17 @@ to connect to or configure the Tor network."""
             )
         )
 
+    # pylint: disable=unused-argument
+    def exit_on_user_request(self, checked: bool = False) -> None:
+        """
+        Exits the application.
+        """
+
+        logging.info(
+            "User clicked the tray menu exit button, therefore exiting, OK."
+        )
+        sys.exit(0)
+
 
 class SdwdateGuiListener(QObject):
     """
@@ -1401,10 +1399,10 @@ class SdwdateGuiListener(QObject):
 # pylint: disable=unused-argument
 def signal_handler(sig: int, frame: FrameType | None) -> None:
     """
-    Handles SIGINT and SIGTERM.
+    Handles terminating signals.
     """
 
-    logging.info("Received SIGINT or SIGTERM, exiting.")
+    logging.info("Received signal %d, exiting.", sig)
     sys.exit(128 + sig)
 
 
@@ -1425,11 +1423,19 @@ def main() -> NoReturn:
         format="%(funcName)s: %(levelname)s: %(message)s", level=logging.INFO
     )
 
+    ## Print a traceback if the Python interpreter or PyQt crashes.
+    faulthandler.enable()
+
     app: QApplication = QApplication(["Sdwdate"])
     app.setQuitOnLastWindowClosed(False)
 
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    for term_signal in (
+        signal.SIGINT,
+        signal.SIGTERM,
+        signal.SIGHUP,
+        signal.SIGQUIT,
+    ):
+        signal.signal(term_signal, signal_handler)
 
     try:
         parse_config_files()

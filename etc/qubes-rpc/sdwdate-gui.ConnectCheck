@@ -40,7 +40,8 @@ else
     printf '%s\n' 'n'
     exit 0
   fi
-  if [ "$(/usr/libexec/sdwdate-gui/sdwdate-gui-config-read 'disable')" = 'false' ]; then
+  if [ "$(/usr/libexec/sdwdate-gui/sdwdate-gui-config-read 'disable')" = 'false' ] \
+    && [ "$(/usr/libexec/sdwdate-gui/sdwdate-gui-config-read 'run_server_in_qubes')" = 'true' ]; then
     touch -- "${sdwdate_gui_tmp_dir}/proxy-should-run" || true
     printf '%s\n' 'n'
     exit 0

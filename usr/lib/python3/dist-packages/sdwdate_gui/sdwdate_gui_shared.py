@@ -1,4 +1,4 @@
-#!/usr/bin/python3 -su
+#!/usr/bin/python3 -Bsu
 
 ## Copyright (C) 2015 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
@@ -46,9 +46,9 @@ class ConfigData:
 MAX_MSG_SIZE: int = 4096
 
 
-def check_bytes_printable(buf: bytes) -> bool:
+def check_bytes_printable(buf: bytes | memoryview) -> bool:
     """
-    Checks if all bytes in the provided buffer are printable ASCII.
+    Checks if all bytes in the provided buffer are printable ASCII or space.
     """
 
     for byte in buf:
@@ -58,33 +58,49 @@ def check_bytes_printable(buf: bytes) -> bool:
     return True
 
 
-def parse_ipc_command(
-    sock_buf: bytes,
-) -> tuple[bytes, str | None, list[str] | None]:
+def parse_ipc_buf(
+    sock_buf: bytes
+) -> tuple[bytes, list[list[str]]]:
     """
-    Reads a command from an IPC socket buffer and returns the command name
-    and its arguments.
+    Splits an IPC buffer into a number of string lists, each representing an
+    IPC command and its arguments. Each message is prefixed by its length,
+    given as a 2-byte unsigned big endian integer. All message bytes must be
+    printable ASCII or space.
     """
 
-    msg_len: int = int.from_bytes(sock_buf[:2], byteorder="big", signed=False)
-    if msg_len > MAX_MSG_SIZE:
-        raise ValueError("Message length too long")
-    if len(sock_buf) < (msg_len + 2):
-        return sock_buf, None, None
-    sock_buf = sock_buf[2:]
-    if msg_len == 0:
-        return sock_buf, None, None
-    msg_buf: bytes = sock_buf[:msg_len]
-    sock_buf = sock_buf[msg_len:]
-    if not check_bytes_printable(msg_buf):
-        raise ValueError("Invalid bytes in command")
-    msg_string: str = msg_buf.decode(encoding="ascii")
-    msg_parts: list[str] = msg_string.split(" ")
-    if len(msg_parts) < 1:
-        return sock_buf, None, None
-    function_name: str = msg_parts[0]
-    msg_parts = msg_parts[1:]
-    return sock_buf, function_name, msg_parts
+    msg_scan_pos: int = 0
+    sock_buf_len: int = len(sock_buf)
+    sock_buf_view: memoryview = memoryview(sock_buf)
+    out_msg_list: list[list[str]] = []
+
+    while True:
+        if sock_buf_len - msg_scan_pos < 2:
+            return (sock_buf[msg_scan_pos:], out_msg_list)
+
+        msg_len: int = int.from_bytes(
+            sock_buf_view[msg_scan_pos : (msg_scan_pos + 2)],
+            byteorder="big",
+            signed=False
+        )
+        if msg_len > MAX_MSG_SIZE:
+            raise ValueError("Message length too long")
+        if msg_len == 0:
+            raise ValueError("Empty message in buffer")
+
+        if sock_buf_len - (msg_scan_pos + 2) < msg_len:
+            return (sock_buf[msg_scan_pos:], out_msg_list)
+
+        msg_buf: memoryview = sock_buf_view[
+            msg_scan_pos + 2 : (msg_len + msg_scan_pos + 2)
+        ]
+        msg_scan_pos += (msg_len + 2)
+
+        if not check_bytes_printable(msg_buf):
+            raise ValueError("Invalid bytes in command")
+        msg_string: str = str(msg_buf, encoding="ascii")
+        msg_parts: list[str] = msg_string.split(" ")
+        assert len(msg_parts) >= 1
+        out_msg_list.append(msg_parts)
 
 
 def parse_config_files() -> None:
