@@ -12,4 +12,10 @@ coverity:
   canonical-repos: "org-ai-assisted/sdwdate-gui"
 
 dist-ai-tests:
-  apt-packages: "python3 python3-pytest python3-hypothesis python3-pyqt5"
+  ## Subject import deps absent from debian:trixie-slim: sdwdate_gui_client
+  ## imports pyinotify; sdwdate_gui_shared imports schema; the coverage suite
+  ## needs python3-coverage (FATAL, never skipped, if missing).
+  apt-packages: "python3 python3-pytest python3-hypothesis python3-pyqt5 python3-pyinotify python3-schema python3-coverage"
+  ## sdwdate_gui_server imports sanitize_string and sdwdate_gui_shared imports
+  ## strict_config_parser, both shipped by helper-scripts (no apt package).
+  helper-scripts: true
