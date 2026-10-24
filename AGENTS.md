@@ -32,3 +32,23 @@ accept the input.
   qrexec_header_parts[1] as the source-VM name and does not reject a header with
   extra tokens (dom0 never emits one). Do not add untrusted-header field
   validation here; the trust boundary is dom0/qrexec, not the header text.
+
+## Tray icon: QSystemTrayIcon backend binds at construction
+
+- `QSystemTrayIcon` binds its backend (legacy XEmbed vs StatusNotifier/SNI
+  D-Bus) at CONSTRUCTION, irreversibly. Constructed before the panel's
+  `org.kde.StatusNotifierWatcher` is on the session bus, Qt falls back to
+  XEmbed; an SNI-only panel (lxqt-panel, waybar) then NEVER shows the icon
+  (startup race, e.g. a Whonix sysmaint-split session). Neither an
+  `isSystemTrayAvailable()` poll before `show()` nor `hide()`+`show()` recovers
+  it; only DEFERRING construction until `isSystemTrayAvailable()` is true picks
+  SNI (Qt5 == Qt6).
+- Latent, not yet guarded: `main()` constructs `SdwdateTrayIcon()`
+  unconditionally
+  (`usr/lib/python3/dist-packages/sdwdate_gui/sdwdate_gui_server.py`). Deferring
+  the construct is a behaviour change (what to do when no tray host ever appears)
+  -- a maintainer call, not a silent fix.
+- Reproduce headless with `xfce4-panel` 4.20 libsystray under Xvfb (a real SNI
+  host); stalonetray (XEmbed auto-re-embed) and trayer/waybar (no headless
+  watcher) cannot reveal it. dist-ai `sdwdate-gui-tests-integration`
+  (`tray_startup_race_reproducer.py`) pins the Qt construction-order behaviour.
