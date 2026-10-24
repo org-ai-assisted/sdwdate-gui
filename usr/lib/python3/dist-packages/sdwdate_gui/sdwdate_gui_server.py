@@ -52,6 +52,7 @@ from PyQt5.QtNetwork import (
 )
 
 from sanitize_string.sanitize_string_lib import sanitize_string
+from guimessages.check_display import exit_if_no_gui
 
 from .sdwdate_gui_shared import (
     ConfigData,
@@ -1440,6 +1441,10 @@ def main() -> NoReturn:
     ## Print a traceback if the Python interpreter or PyQt crashes.
     faulthandler.enable()
 
+    ## Constructing QApplication with no display SIGABRTs (exit 134) via an
+    ## uncatchable C++ qFatal. Exit cleanly (0) first when headless, so a
+    ## no-display environment produces a graceful exit rather than a crash.
+    exit_if_no_gui()
     app: QApplication = QApplication(["Sdwdate"])
     app.setQuitOnLastWindowClosed(False)
 
