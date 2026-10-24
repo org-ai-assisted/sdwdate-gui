@@ -22,6 +22,9 @@ set -o errexit
 set -o nounset
 set -o errtrace
 set -o pipefail
+shopt -s inherit_errexit
+shopt -s shift_verbose
+export LC_ALL=C
 
 true "$0: START"
 
@@ -40,20 +43,12 @@ target_vm="$(/usr/libexec/sdwdate-gui/sdwdate-gui-config-read 'gateway')" || exi
 
 "${systemd_notify[@]}" --ready
 
-connect_check_rslt='n'
-while true; do
-  sleep 1
-  connect_check_rslt="$(
-    ## We redirect a blank string into this qrexec-client-vm invocation's
-    ## stdin, because otherwise it will eat the script's stdin up to this
-    ## point, preventing some data from reaching the server.
-    qrexec-client-vm "${target_vm}" sdwdate-gui.ConnectCheck <<< "" 2>&1
-  )" || connect_check_rslt='n'
-  if [ "${connect_check_rslt}" = 'n' ]; then
-    continue
-  fi
-  break
-done
+connect_check_rslt="$(
+  ## We redirect a blank string into this qrexec-client-vm invocation's
+  ## stdin, because otherwise it will eat the script's stdin up to this
+  ## point, preventing some data from reaching the server.
+  qrexec-client-vm "${target_vm}" sdwdate-gui.ConnectCheck <<< "" 2>/dev/null
+)" || connect_check_rslt='q'
 
 if [ "${connect_check_rslt}" != 'y' ]; then
   ## Drop a flag file to let sdwdate-gui-client know that the server will

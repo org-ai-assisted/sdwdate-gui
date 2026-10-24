@@ -8,10 +8,11 @@
 ## one of the following values:
 ##
 ## * 'y' - Yes, sdwdate-gui.Connect qrexec endpoint is ready to use.
-## * 'n' - No, sdwdate-gui.Connect qrexec endpoint is not ready to use but is
-##         intended to become available later.
 ## * 'q' - No, sdwdate-gui.Connect qrexec endpoint is not ready to use and
 ##         will not become available later, therefore the caller should exit.
+##
+## Note that if the server is not yet running but is expected to start running,
+## this script will hang until the server starts running.
 
 set -o errexit
 set -o nounset
@@ -20,31 +21,37 @@ set -o errtrace
 shopt -s inherit_errexit
 shopt -s shift_verbose
 
-uid="$(id -u)" || { printf '%s\n' 'q'; exit 0; }
-sdwdate_gui_tmp_dir="/run/user/${uid}/sdwdate-gui"
+# shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/light_sleep.bsh
+source "${HELPER_SCRIPTS_PATH:-}/usr/libexec/helper-scripts/light_sleep.bsh"
 
-## See if the socket for sdwdate-gui-server exists or not.
-if [ -S '/run/qubes-rpc/sdwdate-gui.Connect' ]; then
-  ## Endpoint is ready.
-  printf '%s\n' 'y'
-else
-  if ! mkdir --parents -- "${sdwdate_gui_tmp_dir}"; then
-    ## If we can't create this directory, something is very wrong, and the
-    ## caller should give up.
+exithandler() {
+  local exit_code="$?"
+  if [ "${exit_code}" != '0' ]; then
     printf '%s\n' 'q'
-    exit 0
+  else
+    printf '%s\n' 'y'
   fi
-  if [ -f "${sdwdate_gui_tmp_dir}/proxy-should-run" ]; then
-    ## If we've already cached the fact that the server is enabled, tell the
-    ## caller to keep waiting.
-    printf '%s\n' 'n'
-    exit 0
-  fi
-  if [ "$(/usr/libexec/sdwdate-gui/sdwdate-gui-config-read 'disable')" = 'false' ]; then
-    touch -- "${sdwdate_gui_tmp_dir}/proxy-should-run" || true
-    printf '%s\n' 'n'
-    exit 0
-  fi
-  ## Server is disabled, tell the caller to give up.
-  printf '%s\n' 'q'
+  return "${exit_code}"
+}
+trap exithandler EXIT
+
+if [ "$(/usr/libexec/sdwdate-gui/sdwdate-gui-config-read 'disable')" != 'false' ] \
+  || [ "$(/usr/libexec/sdwdate-gui/sdwdate-gui-config-read 'run_server_in_qubes')" != 'true' ]; then
+  exit 1
 fi
+
+while true; do
+  ## See if the socket for sdwdate-gui-server exists or not. We could use
+  ## inotifywait here but this is a very lightweight check and inotifywait
+  ## consumes limited file watcher resources.
+  if [ -S '/run/qubes-rpc/sdwdate-gui.Connect' ]; then
+    ## Endpoint is ready.
+    exit 0
+  fi
+  if [ -f /run/sdwdate-gui-qubes-proxy-helper-failed ]; then
+    ## Something went really wrong while trying to set up sdwdate-gui's qrexec
+    ## socket.
+    exit 1
+  fi
+  light_sleep 1
+done

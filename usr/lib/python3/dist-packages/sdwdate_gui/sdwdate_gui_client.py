@@ -1,4 +1,4 @@
-#!/usr/bin/python3 -su
+#!/usr/bin/python3 -Bsu
 
 ## Copyright (C) 2015 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
@@ -26,7 +26,7 @@ import pyinotify  # type: ignore
 from .sdwdate_gui_shared import (
     ConfigData,
     MAX_MSG_SIZE,
-    parse_ipc_command,
+    parse_ipc_buf,
     parse_config_files,
 )
 
@@ -184,67 +184,45 @@ async def try_parse_commands() -> None:
     Tries to run any commands in the buffer.
     """
 
-    while len(GlobalData.sock_buf) >= 2:
-        function_name: str | None
-        msg_parts: list[str] | None
-        try:
-            preproc_sock_buf_len: int = len(GlobalData.sock_buf)
-            GlobalData.sock_buf, function_name, msg_parts = parse_ipc_command(
-                GlobalData.sock_buf
-            )
-            postproc_sock_buf_len: int = len(GlobalData.sock_buf)
-            if preproc_sock_buf_len == postproc_sock_buf_len:
-                ## If the buffer didn't shrink, that means that we've only
-                ## received part of a message. Break so that we can receive
-                ## the rest of it later on.
-                break
-            if function_name is None:
-                continue
-            assert function_name is not None
-            assert msg_parts is not None
-        except ValueError:
-            await kick_server()
-            return
+    msg_list: list[list[str]]
+    try:
+        GlobalData.sock_buf, msg_list = parse_ipc_buf(GlobalData.sock_buf)
+    except ValueError:
+        await kick_server()
+        return
 
-        match function_name:
+    for msg_parts in msg_list:
+        match msg_parts[0]:
             case "open_tor_control_panel":
-                if len(msg_parts) != 0:
+                if len(msg_parts) != 1:
                     await kick_server()
                     return
                 otcp_task = asyncio.create_task(open_tor_control_panel())
                 GlobalData.background_tasks.add(otcp_task)
-                otcp_task.add_done_callback(
-                    GlobalData.background_tasks.discard
-                )
+                otcp_task.add_done_callback(GlobalData.background_tasks.discard)
             case "open_sdwdate_log":
-                if len(msg_parts) != 0:
+                if len(msg_parts) != 1:
                     await kick_server()
                     return
                 osl_task = asyncio.create_task(open_sdwdate_log())
                 GlobalData.background_tasks.add(osl_task)
-                osl_task.add_done_callback(
-                    GlobalData.background_tasks.discard
-                )
+                osl_task.add_done_callback(GlobalData.background_tasks.discard)
             case "restart_sdwdate":
-                if len(msg_parts) != 0:
+                if len(msg_parts) != 1:
                     await kick_server()
                     return
                 rs_task = asyncio.create_task(restart_sdwdate())
                 GlobalData.background_tasks.add(rs_task)
-                rs_task.add_done_callback(
-                    GlobalData.background_tasks.discard
-                )
+                rs_task.add_done_callback(GlobalData.background_tasks.discard)
             case "stop_sdwdate":
-                if len(msg_parts) != 0:
+                if len(msg_parts) != 1:
                     await kick_server()
                     return
                 ss_task = asyncio.create_task(stop_sdwdate())
                 GlobalData.background_tasks.add(ss_task)
-                ss_task.add_done_callback(
-                    GlobalData.background_tasks.discard
-                )
+                ss_task.add_done_callback(GlobalData.background_tasks.discard)
             case "suppress_client_reconnect":
-                if len(msg_parts) != 0:
+                if len(msg_parts) != 1:
                     await kick_server()
                     return
                 suppress_client_reconnect()
@@ -369,9 +347,9 @@ async def set_sdwdate_status(status: str, msg: str) -> None:
     ## raises) and cap the length, so a long or non-ASCII status message
     ## cannot overflow the two-byte length prefix or get the client kicked
     ## by the server's 4096-byte frame limit.
-    msg = msg.encode(
-        encoding="ascii", errors="replace"
-    ).decode(encoding="ascii")
+    msg = msg.encode(encoding="ascii", errors="replace").decode(
+        encoding="ascii"
+    )
     msg = msg[:MAX_STATUS_MSG_LEN]
 
     ## Encode spaces, newlines, and backslashes into octal escapes.
@@ -428,6 +406,10 @@ async def sdwdate_status_changed() -> None:
         return
     except Exception as e:
         logging.error("Unexpected error", exc_info=e)
+        return
+
+    if not isinstance(status_dict, dict):
+        logging.warning("JSON from sdwdate is not a status dict!")
         return
 
     for check_key in ("icon", "message"):
@@ -577,7 +559,8 @@ def setup_inotify_watch(target_path: str, watch_mask: int) -> None:
 
     assert GlobalData.watch_manager is not None
     ret: dict[str, int] = GlobalData.watch_manager.add_watch(
-        target_path, watch_mask,
+        target_path,
+        watch_mask,
     )
     for path, wd in ret.items():
         if wd < 0:
@@ -618,8 +601,11 @@ async def setup_inotify_watches(
 
 async def do_setup() -> bool:
     """
-    Connects to the server and sets up inotify if needed.
+    Connects to the server and sets up internal state as needed.
     """
+
+    ## Get rid of any old bytes left in the buffer during a reconnect.
+    GlobalData.sock_buf = b""
 
     if not await open_connection():
         return False
@@ -699,6 +685,7 @@ async def main_loop() -> None:
             or not GlobalData.do_reconnect
             or GlobalData.server_pid_path.is_file()
         ):
+            logging.info("Not supposed to try to reconnect, exiting, OK.")
             sys.exit(0)
         await asyncio.sleep(1)
         continue
@@ -724,7 +711,7 @@ async def main() -> NoReturn:
     try:
         parse_config_files()
     except Exception as e:
-        logging.error("Configuration file parsing failed!", exc_info=e)
+        logging.critical("Configuration file parsing failed!", exc_info=e)
         sys.exit(1)
     assert isinstance(ConfigData.conf_dict["disable"], bool)
     if ConfigData.conf_dict["disable"]:

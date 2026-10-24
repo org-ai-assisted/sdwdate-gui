@@ -1,4 +1,4 @@
-#!/usr/bin/python3 -su
+#!/usr/bin/python3 -Bsu
 
 ## Copyright (C) 2015 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
@@ -18,6 +18,7 @@ import signal
 import re
 import functools
 import logging
+import faulthandler
 
 from enum import Enum
 from typing import NoReturn, Pattern, Callable
@@ -51,12 +52,13 @@ from PyQt5.QtNetwork import (
 )
 
 from sanitize_string.sanitize_string_lib import sanitize_string
+from guimessages.check_display import exit_if_no_gui
 
 from .sdwdate_gui_shared import (
     ConfigData,
     MAX_MSG_SIZE,
     check_bytes_printable,
-    parse_ipc_command,
+    parse_ipc_buf,
     parse_config_files,
 )
 
@@ -105,9 +107,9 @@ class TorStatus(Enum):
     """
 
     RUNNING = 0
-    STOPPED = 1
-    DISABLED = 2
-    DISABLED_RUNNING = 3
+    DISABLED_RUNNING = 1
+    STOPPED = 2
+    DISABLED = 3
     ABSENT = 0xFE
     UNKNOWN = 0xFF
 
@@ -273,14 +275,18 @@ class SdwdateGuiClient(QObject):
                 self.__sock_buf = self.__sock_buf[idx + 1 :]
                 break
 
+        if (qrexec_header_bytes is None and len(self.__sock_buf) > 4096) or (
+            qrexec_header_bytes is not None and len(qrexec_header_bytes) > 4096
+        ):
+            logging.warning(
+                "Kicking client '%s' for sending too much data in qrexec "
+                "header",
+                self.client_name_or_unknown(),
+            )
+            self.kick_client()
+            return False
+
         if qrexec_header_bytes is None:
-            if len(self.__sock_buf) > 4096:
-                logging.warning(
-                    "Kicking client '%s' for sending too much data in qrexec "
-                    "header",
-                    self.client_name_or_unknown(),
-                )
-                self.kick_client()
             return False
 
         if not check_bytes_printable(qrexec_header_bytes):
@@ -302,9 +308,7 @@ class SdwdateGuiClient(QObject):
         ## Don't set the client name directly in this function,
         ## __set_client_name is designed to handle the qrexec case too.
         header_name: str = qrexec_header_parts[1]
-        self.__set_client_name(header_name)
-
-        return True
+        return self.__set_client_name(header_name)
 
     # pylint: disable=too-many-return-statements
     def __try_parse_commands(self) -> None:
@@ -312,36 +316,22 @@ class SdwdateGuiClient(QObject):
         Tries to run any commands in the buffer.
         """
 
-        while len(self.__sock_buf) >= 2:
-            function_name: str | None
-            msg_parts: list[str] | None
-            try:
-                preproc_sock_buf_len: int = len(self.__sock_buf)
-                self.__sock_buf, function_name, msg_parts = parse_ipc_command(
-                    self.__sock_buf
-                )
-                postproc_sock_buf_len: int = len(self.__sock_buf)
-                if preproc_sock_buf_len == postproc_sock_buf_len:
-                    ## If the buffer didn't shrink, that means that we've only
-                    ## received part of a message. Break so that we can receive
-                    ## the rest of it later on.
-                    break
-                if function_name is None:
-                    continue
-                assert function_name is not None
-                assert msg_parts is not None
-            except ValueError:
-                logging.warning(
-                    "Kicking client '%s' for sending invalid bytes in "
-                    "command buffer",
-                    self.client_name_or_unknown(),
-                )
-                self.kick_client()
-                return
+        msg_list: list[list[str]]
+        try:
+            self.__sock_buf, msg_list = parse_ipc_buf(self.__sock_buf)
+        except ValueError:
+            logging.warning(
+                "Kicking client '%s' for sending invalid bytes in "
+                "command buffer",
+                self.client_name_or_unknown(),
+            )
+            self.kick_client()
+            return
 
-            match function_name:
+        for msg_parts in msg_list:
+            match msg_parts[0]:
                 case "set_client_name":
-                    if len(msg_parts) != 1:
+                    if len(msg_parts) != 2:
                         logging.warning(
                             "Kicking client '%s' for sending incorrect "
                             "number of arguments for 'set_client_name' "
@@ -350,10 +340,10 @@ class SdwdateGuiClient(QObject):
                         )
                         self.kick_client()
                         return
-                    if not self.__set_client_name(msg_parts[0]):
+                    if not self.__set_client_name(msg_parts[1]):
                         return
                 case "set_sdwdate_status":
-                    if len(msg_parts) != 2:
+                    if len(msg_parts) != 3:
                         logging.warning(
                             "Kicking client '%s' for sending incorrect "
                             "number of arguments for 'set_sdwdate_status' "
@@ -363,11 +353,11 @@ class SdwdateGuiClient(QObject):
                         self.kick_client()
                         return
                     if not self.__set_sdwdate_status(
-                        msg_parts[0], msg_parts[1]
+                        msg_parts[1], msg_parts[2]
                     ):
                         return
                 case "set_tor_status":
-                    if len(msg_parts) != 1:
+                    if len(msg_parts) != 2:
                         logging.warning(
                             "Kicking client '%s' for sending incorrect "
                             "number of arguments for 'set_tor_status' "
@@ -376,7 +366,7 @@ class SdwdateGuiClient(QObject):
                         )
                         self.kick_client()
                         return
-                    if not self.__set_tor_status(msg_parts[0]):
+                    if not self.__set_tor_status(msg_parts[1]):
                         return
                 case _:
                     self.kick_client()
@@ -743,9 +733,9 @@ class SdwdateTrayIcon(QSystemTrayIcon):
         self.error_icon: QIcon = QIcon(self.icon_path + "error.png")
         self.tor_icon_list: list[QIcon] = [
             QIcon(self.icon_path + "tor-ok.png"),
-            self.error_icon,
-            self.error_icon,
             QIcon(self.icon_path + "tor-warning.png"),
+            self.error_icon,
+            self.error_icon,
         ]
         self.sdwdate_icon_list: list[QIcon] = [
             QIcon(self.icon_path + "sdwdate-success.png"),
@@ -1106,7 +1096,7 @@ to connect to or configure the Tor network."""
             "&Exit",
             self.menu,
         )
-        action.triggered.connect(sys.exit)
+        action.triggered.connect(self.exit_on_user_request)
         self.menu.addAction(action)
         self.menu_action_list.append(action)
 
@@ -1284,6 +1274,17 @@ to connect to or configure the Tor network."""
             )
         )
 
+    # pylint: disable=unused-argument
+    def exit_on_user_request(self, checked: bool = False) -> None:
+        """
+        Exits the application.
+        """
+
+        logging.info(
+            "User clicked the tray menu exit button, therefore exiting, OK."
+        )
+        sys.exit(0)
+
 
 class SdwdateGuiListener(QObject):
     """
@@ -1331,17 +1332,19 @@ class SdwdateGuiListener(QObject):
                     sdwdate_pid_str: str = f.readline().strip()
                 pid_verify_re: Pattern[str] = re.compile("^[0-9]+$")
                 if not pid_verify_re.match(sdwdate_pid_str):
-                    logging.error(
-                        "PID marker file contains non-numeric characters!",
+                    logging.critical(
+                        "PID marker file '%s' contains non-numeric "
+                        + "characters!",
+                        str(sdwdate_pid_file),
                     )
                     sys.exit(1)
                 if Path(f"/proc/{sdwdate_pid_str}").is_dir():
-                    logging.error(
+                    logging.critical(
                         "sdwdate_gui_server is already running!",
                     )
                     sys.exit(1)
             except Exception as e:
-                logging.error(
+                logging.critical(
                     "Could not check for running sdwdate_gui_server!",
                     exc_info=e,
                 )
@@ -1352,8 +1355,9 @@ class SdwdateGuiListener(QObject):
         except FileNotFoundError:
             pass
         except Exception as e:
-            logging.error(
-                "Could not erase old PID file!",
+            logging.critical(
+                "Could not erase old PID file '%s'!",
+                str(sdwdate_pid_file),
                 exc_info=e,
             )
             sys.exit(1)
@@ -1362,8 +1366,9 @@ class SdwdateGuiListener(QObject):
             with open(sdwdate_pid_file, "w", encoding="utf-8") as f:
                 f.write(str(os.getpid()))
         except Exception as e:
-            logging.error(
-                "Could not save PID to PID file!",
+            logging.critical(
+                "Could not save PID to PID file '%s'!",
+                str(sdwdate_pid_file),
                 exc_info=e,
             )
             sys.exit(1)
@@ -1373,8 +1378,9 @@ class SdwdateGuiListener(QObject):
         except FileNotFoundError:
             pass
         except Exception as e:
-            logging.error(
-                "Could not erase old server socket!",
+            logging.critical(
+                "Could not erase old server socket '%s'!",
+                str(sdwdate_socket_file),
                 exc_info=e,
             )
             sys.exit(1)
@@ -1383,7 +1389,14 @@ class SdwdateGuiListener(QObject):
         ## Restrict the IPC socket to the owning user rather than relying
         ## solely on the 0700 mode of the parent /run/user/UID directory.
         self.server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
-        self.server.listen(str(sdwdate_socket_file))
+        if not self.server.listen(str(sdwdate_socket_file)):
+            logging.critical(
+                "Could not listen on server socket '%s', Qt returned error "
+                + "'%s'!",
+                str(sdwdate_socket_file),
+                self.server.errorString(),
+            )
+            sys.exit(1)
         self.server.newConnection.connect(self.spawn_client)
 
     def spawn_client(self) -> None:
@@ -1401,10 +1414,10 @@ class SdwdateGuiListener(QObject):
 # pylint: disable=unused-argument
 def signal_handler(sig: int, frame: FrameType | None) -> None:
     """
-    Handles SIGINT and SIGTERM.
+    Handles terminating signals.
     """
 
-    logging.info("Received SIGINT or SIGTERM, exiting.")
+    logging.info("Received signal %d, exiting.", sig)
     sys.exit(128 + sig)
 
 
@@ -1425,16 +1438,28 @@ def main() -> NoReturn:
         format="%(funcName)s: %(levelname)s: %(message)s", level=logging.INFO
     )
 
+    ## Print a traceback if the Python interpreter or PyQt crashes.
+    faulthandler.enable()
+
+    ## Constructing QApplication with no display SIGABRTs (exit 134) via an
+    ## uncatchable C++ qFatal. Exit cleanly (0) first when headless, so a
+    ## no-display environment produces a graceful exit rather than a crash.
+    exit_if_no_gui()
     app: QApplication = QApplication(["Sdwdate"])
     app.setQuitOnLastWindowClosed(False)
 
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    for term_signal in (
+        signal.SIGINT,
+        signal.SIGTERM,
+        signal.SIGHUP,
+        signal.SIGQUIT,
+    ):
+        signal.signal(term_signal, signal_handler)
 
     try:
         parse_config_files()
     except Exception as e:
-        logging.error("Configuration file parsing failed!", exc_info=e)
+        logging.critical("Configuration file parsing failed!", exc_info=e)
         sys.exit(1)
     assert isinstance(ConfigData.conf_dict["disable"], bool)
     assert isinstance(ConfigData.conf_dict["run_server_in_qubes"], bool)
