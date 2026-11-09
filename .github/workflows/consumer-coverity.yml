@@ -15,7 +15,7 @@
 ## coverity.apt-packages, coverity.build-command.
 ##
 ## Reusable docs:
-## https://github.com/org-ai-assisted/developer-meta-files/blob/master/.github/workflows/reusable-coverity.yml
+## https://github.com/org-ai-assisted/developer-meta-files/blob/ai/.github/workflows/reusable-coverity.yml
 
 name: Coverity
 
@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   coverity:
-    uses: org-ai-assisted/developer-meta-files/.github/workflows/reusable-coverity.yml@master
+    uses: org-ai-assisted/developer-meta-files/.github/workflows/reusable-coverity.yml@ai
     secrets:
       COVERITY_SCAN_TOKEN: ${{ secrets.COVERITY_SCAN_TOKEN }}
       COVERITY_SCAN_EMAIL: ${{ secrets.COVERITY_SCAN_EMAIL }}

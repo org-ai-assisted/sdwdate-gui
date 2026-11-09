@@ -15,15 +15,15 @@
 ## reusable, so this wrapper carries no per-repo state.
 ##
 ## Reusable docs:
-## https://github.com/org-ai-assisted/developer-meta-files/blob/master/.github/workflows/reusable-dist-ai-tests.yml
+## https://github.com/org-ai-assisted/developer-meta-files/blob/ai/.github/workflows/reusable-dist-ai-tests.yml
 
 name: dist-ai tests
 
 on:
   pull_request:
-    branches: [master]
+    branches: [master, ai]
   push:
-    branches: [master]
+    branches: [master, ai]
   workflow_dispatch:
 
 permissions:
@@ -31,8 +31,12 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  ## Cancel only superseded PR runs. A push to master must run to
+  ## completion so the lane reports a real pass/fail: on a fast-moving,
+  ## multi-session master 'true' cancels every master run before it
+  ## finishes, leaving the lane perpetually 'cancelled' (no signal).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   dist-ai-tests:
-    uses: org-ai-assisted/developer-meta-files/.github/workflows/reusable-dist-ai-tests.yml@master
+    uses: org-ai-assisted/developer-meta-files/.github/workflows/reusable-dist-ai-tests.yml@ai
