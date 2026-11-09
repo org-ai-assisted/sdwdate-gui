@@ -20,3 +20,9 @@ SystemCallArchitectures=native
 LockPersonality=true
 SystemCallFilter=~memfd_create
 NoExecPaths=/run /tmp /var/tmp /dev/shm /dev
+
+## Defense-in-depth (separate axis from W^X): NoNewPrivileges blocks this
+## daemon and its children from gaining privileges (setuid/setgid, file
+## capabilities, AppArmor non-subset Px). The proxy only runs
+## qrexec-client-vm, no privilege gain.
+NoNewPrivileges=yes
