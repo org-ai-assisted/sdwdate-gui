@@ -9,3 +9,15 @@ Type=oneshot
 ExecCondition=/usr/libexec/helper-scripts/has_netvm_on_qubes
 ExecStart=/usr/bin/sdwdate-gui
 RemainAfterExit=true
+
+## W^X hardening (anonymous + file-backed). MemoryDenyWriteExecute denies anon
+## W+X / mprotect/shmat gaining PROT_EXEC; SystemCallArchitectures=native closes
+## the secondary-ABI bypass; LockPersonality blocks READ_IMPLIES_EXEC;
+## ~memfd_create kills the memfd bypass; NoExecPaths marks the shared writable
+## dirs non-executable. sdwdate-gui is a bash launcher; the GUIs it backgrounds
+## are PyQt5 widget apps (no QtWebEngine/QML), no JIT. Inherited by those GUIs.
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+LockPersonality=true
+SystemCallFilter=~memfd_create
+NoExecPaths=/tmp /var/tmp /dev/shm

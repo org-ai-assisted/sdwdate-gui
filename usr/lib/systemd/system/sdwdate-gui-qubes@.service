@@ -9,3 +9,14 @@ Type=notify
 RemainAfterExit=false
 ExecStart=/usr/libexec/sdwdate-gui/sdwdate-gui-qubes-proxy
 StandardInput=socket
+
+## W^X hardening (anonymous + file-backed). MemoryDenyWriteExecute denies anon
+## W+X / mprotect/shmat gaining PROT_EXEC; SystemCallArchitectures=native closes
+## the secondary-ABI bypass; LockPersonality blocks READ_IMPLIES_EXEC;
+## ~memfd_create kills the memfd bypass; NoExecPaths marks the writable dirs
+## non-executable. bash socket-activated proxy, no JIT.
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+LockPersonality=true
+SystemCallFilter=~memfd_create
+NoExecPaths=/run /tmp /var/tmp /dev/shm
