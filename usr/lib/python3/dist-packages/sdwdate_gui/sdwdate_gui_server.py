@@ -1353,6 +1353,7 @@ class SdwdateGuiListener(QObject):
         try:
             os.remove(sdwdate_pid_file)
         except FileNotFoundError:
+            # already absent; nothing to erase
             pass
         except Exception as e:
             logging.critical(
@@ -1376,6 +1377,7 @@ class SdwdateGuiListener(QObject):
         try:
             os.remove(sdwdate_socket_file)
         except FileNotFoundError:
+            # already absent; nothing to erase
             pass
         except Exception as e:
             logging.critical(
