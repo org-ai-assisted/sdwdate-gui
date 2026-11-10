@@ -5,10 +5,9 @@
 
 ## This script runs on both the gateway and workstation.
 ##
-## On the gateway, it waits for up to 20 seconds for sdwdate-gui-server to
-## start for the default user, and symlinks its socket to the
-## sdwdate-gui.Connect qrexec endpoint so that the workstation can communicate
-## with it.
+## On the gateway, it waits for sdwdate-gui-server to start for the default
+## user, and symlinks its socket to the sdwdate-gui.Connect qrexec endpoint so
+## that the workstation can communicate with it.
 ##
 ## On the workstation, it drops a flag file that makes systemd enable the
 ## sdwdate-gui-qubes@.socket units, enabling sdwdate-gui-client to communicate
@@ -20,8 +19,18 @@ set -o pipefail
 set -o errtrace
 shopt -s inherit_errexit
 shopt -s shift_verbose
+export LC_ALL=C
 
-socket_check_counter=0
+# shellcheck source=../../../helper-scripts/usr/libexec/helper-scripts/light_sleep.bsh
+source "${HELPER_SCRIPTS_PATH:-}/usr/libexec/helper-scripts/light_sleep.bsh"
+
+exithandler() {
+  local exit_code="$?"
+  if [ "${exit_code}" != '0' ]; then
+    touch /run/sdwdate-gui-qubes-proxy-helper-failed
+  fi
+}
+trap exithandler EXIT
 
 qubes_server_permitted="$(/usr/libexec/sdwdate-gui/sdwdate-gui-config-read 'run_server_in_qubes')" || exit 1
 default_user="$(qubesdb-read /default-user)" || exit 1
@@ -39,13 +48,12 @@ else
     exit 0
   fi
   true "INFO: $0: Running on Qubes, and server enabled."
-  while (( socket_check_counter < 20 )); do
-    sleep 1
-    (( socket_check_counter += 1 )) || true
+  while true; do
+    light_sleep 1
     true "INFO: $0: Check if '${server_sock_path}' socket file already exists..."
     if [ -S "${server_sock_path}" ]; then
       true "INFO: $0: socket file '${server_sock_path}' exists: yes"
-      ln -s -- "${server_sock_path}" '/run/qubes-rpc/sdwdate-gui.Connect'
+      ln -s --force -- "${server_sock_path}" '/run/qubes-rpc/sdwdate-gui.Connect'
       break
     fi
     true "INFO: $0: socket file '${server_sock_path}' exists: no"

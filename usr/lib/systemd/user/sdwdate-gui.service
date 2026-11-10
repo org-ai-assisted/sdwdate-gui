@@ -9,3 +9,27 @@ Type=oneshot
 ExecCondition=/usr/libexec/helper-scripts/has_netvm_on_qubes
 ExecStart=/usr/bin/sdwdate-gui
 RemainAfterExit=true
+
+## W^X hardening (anonymous + file-backed). MemoryDenyWriteExecute denies anon
+## W+X / mprotect/shmat gaining PROT_EXEC; SystemCallArchitectures=native closes
+## the secondary-ABI bypass; LockPersonality blocks READ_IMPLIES_EXEC;
+## ~memfd_create denies the memfd bypass; NoExecPaths marks the shared writable
+## dirs non-executable. sdwdate-gui is a bash launcher; the GUIs it backgrounds
+## are PyQt5 widget apps (no QtWebEngine/QML), no JIT. Inherited by those GUIs.
+##
+## EPERM (not default SIGSYS): this daemon's own Qt/Wayland code (the
+## backgrounded PyQt5 GUIs, which inherit this filter) calls memfd_create for shm
+## draw buffers; EPERM keeps the memfd W^X bypass closed (denied) while allowing
+## the shm_open fallback to render; /dev/shm noexec keeps that fallback non-exec.
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+LockPersonality=true
+SystemCallFilter=~memfd_create
+SystemCallErrorNumber=EPERM
+NoExecPaths=/tmp /var/tmp /dev/shm
+
+## Defense-in-depth (separate axis from W^X): NoNewPrivileges blocks this
+## daemon and its children (the backgrounded GUIs) from gaining privileges
+## (setuid/setgid, file capabilities, AppArmor non-subset Px). Privileged
+## work goes via leaprun, a non-setuid privleapd socket client.
+NoNewPrivileges=yes

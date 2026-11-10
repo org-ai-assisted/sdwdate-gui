@@ -9,5 +9,22 @@ Type=exec
 RemainAfterExit=true
 ExecStart=/usr/libexec/sdwdate-gui/sdwdate-gui-qubes-proxy-helper
 
+## W^X hardening (anonymous + file-backed). MemoryDenyWriteExecute denies anon
+## W+X / mprotect/shmat gaining PROT_EXEC; SystemCallArchitectures=native closes
+## the secondary-ABI bypass; LockPersonality blocks READ_IMPLIES_EXEC;
+## ~memfd_create kills the memfd bypass; NoExecPaths marks the writable dirs
+## non-executable. bash qrexec socket-enabler, no JIT.
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+LockPersonality=true
+SystemCallFilter=~memfd_create
+NoExecPaths=/run /tmp /var/tmp /dev/shm /dev
+
+## Defense-in-depth (separate axis from W^X): NoNewPrivileges blocks this
+## daemon and its children from gaining privileges (setuid/setgid, file
+## capabilities, AppArmor non-subset Px). The helper only runs
+## qubesdb-read/ln, no privilege gain.
+NoNewPrivileges=yes
+
 [Install]
 WantedBy=multi-user.target
